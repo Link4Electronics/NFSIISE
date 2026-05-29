@@ -4,12 +4,285 @@
 #include "Version"
 #include <SDL2/SDL.h>
 #include <signal.h>
+#include <ucontext.h>
 #include <sys/stat.h>
 #ifdef WIN32
 	#include <windows.h>
 #else
 	#include <sched.h>
 #endif
+#include <sys/mman.h>
+#include <string.h>
+#include <unistd.h>
+#include <errno.h>
+
+#if defined(HOST_64BIT)
+#if !defined(MAP_FIXED_NOREPLACE) && defined(MAP_FIXED)
+/* Fallback: same numeric value on all Linux arches since 4.17 */
+#define MAP_FIXED_NOREPLACE 0x100000
+#endif
+
+/* -----  Low-4GB heap  ------------------------------------------------- */
+
+#if defined(__aarch64__) || defined(__powerpc64__) || defined(__PPC64__)
+/*
+ * ARM64/PPC64 lack MAP_32BIT.  Instead of probing fixed slots (which
+ * exhaust quickly) we carve from a single large MAP_FIXED pool and
+ * maintain a free list so free+reuse works.
+ *
+ * Block layout (same for both allocated and freed blocks):
+ *   +0  size_t alloc_size            - total block size including header
+ *   +8  [user data]  (when allocated)
+ *        next pointer (when on free list, stored in the first 8 bytes of
+ *        what was user data)
+ *
+ * free32 therefore still reads alloc_size at *(p - 8), matching the
+ * original slot-based format.
+ */
+#define POOL_SIZE  (258UL * 1024 * 1024)   /* 258 MB per pool chunk */
+#define POOL_ALIGN 16
+
+#include <pthread.h>
+
+/* Declared in MemoryTranslate.cpp. */
+extern void add_pool_range(uint32_t x86_base, uintptr_t host_base, size_t size);
+
+static void *pool_freelist = NULL;  /* linked through the first pointer-sized
+                                       slot of each freed block */
+static void  *pool_cur     = NULL;
+static size_t pool_left    = 0;
+static pthread_mutex_t pool_mtx = PTHREAD_MUTEX_INITIALIZER;
+
+/* Track all successfully mapped pool chunks so that free32/malloc32 can
+   reject stale pointers that leaked in from the original x86 game data. */
+#define MAX_POOL_CHUNKS 12
+static void  *pool_chunks[MAX_POOL_CHUNKS];
+static int    pool_nchunks = 0;
+
+/* Return 1 when ptr falls inside one of our known pool chunks. */
+static int in_pool(const void *ptr)
+{
+	for (int i = 0; i < pool_nchunks; i++)
+		if ((const char *)ptr >= (const char *)pool_chunks[i] &&
+		    (const char *)ptr <  (const char *)pool_chunks[i] + POOL_SIZE)
+			return 1;
+	return 0;
+}
+
+static int add_pool_chunk(void *base)
+{
+	if (pool_nchunks >= MAX_POOL_CHUNKS) return 0;
+	pool_chunks[pool_nchunks++] = base;
+	return 1;
+}
+
+static int pool_grow(void)
+{
+	static const uintptr_t addrs[] = {
+		0x20000000, 0x40000000,
+		0x10000000, 0x30000000, 0x50000000, 0x60000000, 0x70000000,
+		0x08000000, 0x0C000000, 0x18000000, 0x28000000, 0x38000000,
+	};
+	for (int i = 0; i < (int)(sizeof addrs / sizeof addrs[0]); i++) {
+		int skip = 0;
+		for (int j = 0; j < pool_nchunks; j++)
+			if ((uintptr_t)pool_chunks[j] == addrs[i]) { skip = 1; break; }
+		if (skip) continue;
+		size_t sz = (i == 0) ? POOL_SIZE + 0x10000 : POOL_SIZE;
+		int flags = MAP_PRIVATE | MAP_ANONYMOUS;
+		void *p;
+		int mapped = 0;
+
+#if defined(MAP_FIXED_NOREPLACE)
+		flags |= MAP_FIXED_NOREPLACE;
+		p = mmap((void *)addrs[i], sz,
+			       PROT_READ | PROT_WRITE,
+			       flags, -1, 0);
+		if (p != MAP_FAILED) {
+			mapped = 1;
+		} else {
+			int e = errno;
+			if (e == EINVAL)
+				/* flag not supported → try MAP_FIXED below */;
+			else
+				goto try_any;   /* EEXIST or other → skip MAP_FIXED */
+		}
+#endif
+		if (!mapped) {
+			p = mmap((void *)addrs[i], sz,
+				       PROT_READ | PROT_WRITE,
+				       MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
+				       -1, 0);
+			if (p != MAP_FAILED)
+				mapped = 1;
+		}
+
+try_any:
+		if (!mapped) {
+			/* Address-specific mmap failed.  Allocate at any address
+			   the kernel provides and register the x86→host mapping
+			   so translate_x86_addr can find it. */
+			p = mmap(NULL, sz,
+				       PROT_READ | PROT_WRITE,
+				       MAP_PRIVATE | MAP_ANONYMOUS,
+				       -1, 0);
+			if (p != MAP_FAILED)
+				mapped = 1;
+		}
+
+		if (mapped) {
+			pool_cur  = p;
+			pool_left = sz;
+			add_pool_chunk(p);
+			add_pool_range((uint32_t)addrs[i], (uintptr_t)p, sz);
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
+/* Pre-allocate all pool chunks so that x86 heap addresses (used
+   directly by the BE address-translation path) are always backed
+   by mapped memory.  Safe to call early (pool is still empty). */
+void pool_preallocate(void)
+{
+	pthread_mutex_lock(&pool_mtx);
+	while (pool_grow()) {
+		/* keep going until pool_grow returns 0 (no more slots) */
+	}
+	pthread_mutex_unlock(&pool_mtx);
+}
+
+void *malloc32(size_t size)
+{
+	/* Total needed: sizeof(size_t) header + user size. */
+	size_t need = size + sizeof(size_t);
+	if (need < POOL_ALIGN) need = POOL_ALIGN;
+	need = (need + POOL_ALIGN - 1) & ~(size_t)(POOL_ALIGN - 1);
+
+	pthread_mutex_lock(&pool_mtx);
+
+	/* Walk the free list.  Each entry's header (at block+0) stores
+	 * alloc_size; the *next* pointer lives at block+sizeof(size_t)
+	 * (i.e. where the first 8 bytes of user data would be).
+	 * Entries outside our pool (stale x86 32-bit addresses from
+	 * free_wrap) are unlinked and skipped. */
+	void **pp = (void **)&pool_freelist;
+	while (*pp) {
+		void   *blk   = *pp;
+		if (!in_pool(blk)) {
+			*pp = *(void **)((char *)blk + sizeof(size_t));
+			continue;
+		}
+		size_t  bsize = *(size_t *)blk;
+		if (bsize >= need) {
+			*pp = *(void **)((char *)blk + sizeof(size_t));
+			/* Re-store need so free32 sees the correct size. */
+			*(size_t *)blk = need;
+			pthread_mutex_unlock(&pool_mtx);
+			return (void *)((char *)blk + sizeof(size_t));
+		}
+		pp = (void **)((char *)blk + sizeof(size_t));
+	}
+
+	/* Bump-allocate from the current pool chunk. */
+	if (pool_left < need) {
+		if (!pool_grow()) {
+			pthread_mutex_unlock(&pool_mtx);
+			return NULL;
+		}
+	}
+	void *blk = pool_cur;
+	pool_cur  = (char *)pool_cur + need;
+	pool_left -= need;
+	*(size_t *)blk = need;
+
+	pthread_mutex_unlock(&pool_mtx);
+	return (void *)((char *)blk + sizeof(size_t));
+}
+
+void free32(void *p)
+{
+	if (!p) return;
+	/* Ignore pointers outside our pool — they are stale x86 32-bit
+	 * addresses from game data that reached us through free_wrap. */
+	if (!in_pool(p)) return;
+	pthread_mutex_lock(&pool_mtx);
+	/* Block base is at p - sizeof(size_t).  first 8 bytes = alloc_size,
+	 * next 8 bytes = free-list pointer (overwrites old user data). */
+	void *blk = (void *)((char *)p - sizeof(size_t));
+	*(void **)((char *)blk + sizeof(size_t)) = pool_freelist;
+	pool_freelist = blk;
+	pthread_mutex_unlock(&pool_mtx);
+}
+
+/* Allocate the x86 emulated stack from the pool.  The pool is always in
+   the low 4 GB (MAP_FIXED guarantees this) and easily fits a 1 MB stack
+   alongside BSS data.  The stack grows downward from the top of the
+   allocated block, never colliding with the bump allocator. */
+uint32_t wrapper_get_stack_top(void)
+{
+	static uint32_t top = 0;
+	if (top) return top;
+	void *p = malloc32(0x100000);
+	if (!p) return 0;
+	top = (uint32_t)(uintptr_t)p + 0x100000;
+	return top;
+}
+
+#else  /* x86_64 (uses MAP_32BIT) */
+/* -----  Slot-based approach (x86_64)  ---------------------------------- */
+
+static void *mmap_low(size_t size)
+{
+	void *p;
+
+#if defined(MAP_32BIT)
+	p = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT, -1, 0);
+	if (p != MAP_FAILED) return p;
+#endif
+
+	uintptr_t addr;
+	for (addr = 0x70000000; addr >= 0x10000000; addr -= 0x10000000)
+	{
+		int flags = MAP_PRIVATE | MAP_ANONYMOUS;
+
+#if defined(MAP_FIXED_NOREPLACE)
+		p = mmap((void *)addr, size, PROT_READ | PROT_WRITE,
+			 flags | MAP_FIXED_NOREPLACE, -1, 0);
+		if (p != MAP_FAILED) return p;
+		{ int e = errno;
+		if (e == EEXIST) continue;		/* address taken, try next */
+		if (e != EINVAL) return MAP_FAILED;	/* real error */
+		} /* EINVAL → flag not supported; fall through to MAP_FIXED. */
+#endif
+		/* MAP_FIXED: force exact address (safe on ARM64 — low 4GB is empty). */
+		p = mmap((void *)addr, size, PROT_READ | PROT_WRITE,
+			 flags | MAP_FIXED, -1, 0);
+		if (p != MAP_FAILED) return p;
+		if (errno == ENOMEM) return MAP_FAILED;	/* out of memory, stop */
+	}
+	return MAP_FAILED;
+}
+
+void *malloc32(size_t size) {
+	/* Allocate in low 4GB, storing the size in a header so free32 can munmap. */
+	size_t alloc_size = size + sizeof(size_t);
+	void *p = mmap_low(alloc_size);
+	if (p == MAP_FAILED) return NULL;
+	*(size_t *)p = alloc_size;
+	return (void *)((uintptr_t)p + sizeof(size_t));
+}
+
+void free32(void *p) {
+	if (!p) return;
+	void *real_p = (void *)((uintptr_t)p - sizeof(size_t));
+	size_t size = *(size_t *)real_p;
+	munmap(real_p, size);
+}
+#endif  /* pool-based allocator */
+#endif  /* HOST_64BIT */
 
 static const char title[] = "Need For Speed II SE";
 
@@ -194,6 +467,25 @@ static void checkGameDirs()
 			exit(-1);
 		}
 	}
+}
+
+#if defined(__aarch64__)
+#define MC_PC(ctx)  (((ucontext_t *)(ctx))->uc_mcontext.pc)
+#elif defined(__x86_64__)
+#define MC_PC(ctx)  (((ucontext_t *)(ctx))->uc_mcontext.gregs[REG_RIP])
+#elif defined(__powerpc__) || defined(__powerpc64__) || defined(__PPC__)
+#define MC_PC(ctx)  (((ucontext_t *)(ctx))->uc_mcontext.gp_regs[PT_NIP])
+#else
+#define MC_PC(ctx)  ((void*)0)
+#endif
+
+static void sigsegv_handler(int sig, siginfo_t *info, void *ucontext)
+{
+	fprintf(stderr, "SIGSEGV at PC %p fault %p\n",
+		(void *)MC_PC(ucontext), info->si_addr);
+	fflush(stderr);
+	signal(SIGSEGV, SIG_DFL);
+	raise(SIGSEGV);
 }
 
 static void signal_handler(int sig)
@@ -404,7 +696,7 @@ void WrapperInit(void)
 	signal(SIGBUS, signal_handler);
 	signal(SIGFPE, signal_handler);
 	signal(SIGUSR1, signal_handler);
-	signal(SIGSEGV, signal_handler);
+	{ struct sigaction sa = { .sa_sigaction = sigsegv_handler, .sa_flags = SA_SIGINFO }; sigaction(SIGSEGV, &sa, NULL); }
 	signal(SIGUSR2, signal_handler);
 	signal(SIGPIPE, signal_handler);
 	signal(SIGALRM, signal_handler);
@@ -674,6 +966,30 @@ REALIGN int32_t SDL_NumJoysticks_wrap(void)
 int main(int argc, char *argv[])
 {
 	void nfs2seEntrypoint();
+	struct stat st;
+	char *slash = strrchr(argv[0], '/');
+	if (slash)
+	{
+		*slash = '\0';
+		chdir(argv[0]);
+		*slash = '/';
+	}
+	/* If data not found next to binary, check $HOME/.nfs2se (AppImage/portable). */
+	if ((stat("gamedata", &st) != 0 || !S_ISDIR(st.st_mode)) &&
+	    (stat("fedata/pc", &st) != 0 || !S_ISDIR(st.st_mode)))
+	{
+		const char *home = getenv("HOME");
+		if (home)
+		{
+			char *path = malloc(strlen(home) + 20);
+			sprintf(path, "%s/.nfs2se", home);
+			if (stat(path, &st) == 0 && S_ISDIR(st.st_mode))
+			{
+				chdir(path);
+			}
+			free(path);
+		}
+	}
 	nfs2seEntrypoint();
 	return 0;
 }
@@ -690,12 +1006,123 @@ REALIGN uint32_t SDL_GetTicks_wrap(void)
 }
 REALIGN void SDL_Delay_wrap(uint32_t ms)
 {
-	SDL_Delay(ms);
+	SDL_Delay(ms ? ms : 1);
 }
 
-REALIGN int32_t vsprintf_wrap(char *s, const char *fmt, va_list arg)
+REALIGN int32_t vsprintf_wrap(char *s, const char *fmt, void *arg)
 {
-	return vsprintf(s, fmt, arg);
+#if defined(HOST_64BIT)
+	/* On x86_64/ARM64, variadic calling convention differs from x86_32.
+	 * The game stores variadic args as 32-bit values on its simulated stack,
+	 * but 64-bit va_list expects 64-bit slots.
+	 * We reimplement vsprintf here, reading 32-bit args from the game stack
+	 * and formatting into the destination buffer. */
+	typedef uint32_t *args32_ptr_t;
+	args32_ptr_t ap = (args32_ptr_t)arg;
+	char buf[2048];
+	int bi = 0, fi = 0;
+	while (fmt[fi] && bi < (int)sizeof(buf) - 1) {
+		if (fmt[fi] != '%') {
+			buf[bi++] = fmt[fi++];
+			continue;
+		}
+		int pi = fi;
+		/* collect %...[flags][width][.precision][length]specifier */
+		char fmt_spec[64];
+		int si = 0;
+		fmt_spec[si++] = fmt[fi++]; /* '%' */
+		/* flags */
+		while (fmt[fi] == '-' || fmt[fi] == '+' || fmt[fi] == ' ' || fmt[fi] == '#' || fmt[fi] == '0')
+			fmt_spec[si++] = fmt[fi++];
+		/* width */
+		if (fmt[fi] == '*') {
+			fmt_spec[si++] = '*';
+			fi++;
+		} else {
+			while (fmt[fi] >= '0' && fmt[fi] <= '9')
+				fmt_spec[si++] = fmt[fi++];
+		}
+		/* precision */
+		if (fmt[fi] == '.') {
+			fmt_spec[si++] = '.';
+			fi++;
+			if (fmt[fi] == '*') {
+				fmt_spec[si++] = '*';
+				fi++;
+			} else {
+				while (fmt[fi] >= '0' && fmt[fi] <= '9')
+					fmt_spec[si++] = fmt[fi++];
+			}
+		}
+		/* length modifier */
+		if (fmt[fi] == 'h' || fmt[fi] == 'l' || fmt[fi] == 'L' || fmt[fi] == 'z' || fmt[fi] == 't' || fmt[fi] == 'j') {
+			fmt_spec[si++] = fmt[fi++];
+			if (fmt[fi] == 'h' || fmt[fi] == 'l')
+				fmt_spec[si++] = fmt[fi++];
+		}
+		/* conversion specifier */
+		if (fmt[fi] == '\0') break;
+		char conv = fmt[fi];
+		fmt_spec[si++] = conv;
+		fmt_spec[si] = '\0';
+		fi++;
+
+		if (conv == '%') {
+			buf[bi++] = '%';
+			continue;
+		}
+
+		/* read 32-bit width arg if '*' was used */
+		int width_val = 0, prec_val = -1;
+		int got_star;
+		got_star = 0;
+		for (int k = 0; fmt_spec[k]; k++) {
+			if (fmt_spec[k] == '*') {
+				if (!got_star) {
+					got_star = 1;
+					width_val = (int)(int32_t)*ap++;
+				} else {
+					prec_val = (int)(int32_t)*ap++;
+				}
+			}
+		}
+
+		/* read the actual variadic arg from game stack */
+		char arg_buf[256];
+
+		if (conv == 's' || conv == 'p') {
+			uint32_t addr32 = *ap++;
+			void *ptr = (void *)(uintptr_t)addr32;
+			snprintf(arg_buf, sizeof(arg_buf), fmt_spec, ptr);
+		} else if (conv == 'c') {
+			int ch = (int)(int32_t)*ap++ & 0xFF;
+			snprintf(arg_buf, sizeof(arg_buf), fmt_spec, ch);
+		} else if (conv == 'n') {
+			/* %n writes output count, skip */
+		} else if (conv == 'f' || conv == 'F' || conv == 'e' || conv == 'E' ||
+			   conv == 'g' || conv == 'G' || conv == 'a' || conv == 'A') {
+			/* double: 8 bytes on the stack (pushed as two 32-bit halves) */
+			uint32_t lo = *ap++;
+			uint32_t hi = *ap++;
+			double val;
+			uint64_t tmp = (uint64_t)hi << 32 | lo;
+			memcpy(&val, &tmp, 8);
+			snprintf(arg_buf, sizeof(arg_buf), fmt_spec, val);
+		} else {
+			/* integer types: d, i, u, o, x, X */
+			int val = (int)(int32_t)*ap++;
+			snprintf(arg_buf, sizeof(arg_buf), fmt_spec, val);
+		}
+
+		for (int j = 0; arg_buf[j] && bi < (int)sizeof(buf) - 1; j++)
+			buf[bi++] = arg_buf[j];
+	}
+	buf[bi] = '\0';
+	strcpy(s, buf);
+	return bi;
+#else
+	return vsprintf(s, fmt, (va_list)arg);
+#endif
 }
 REALIGN int32_t fscanf_wrap(FILE *f, const char *fmt, ...)
 {
@@ -712,15 +1139,43 @@ REALIGN int32_t fclose_wrap(FILE *f)
 }
 REALIGN void *calloc_wrap(size_t num, size_t size)
 {
+#if defined(HOST_64BIT) && !defined(__aarch64__) && !defined(__powerpc64__) && !defined(__PPC64__)
+	void *p = mmap_low(num * size);
+	if (p == MAP_FAILED) return NULL;
+	memset(p, 0, num * size);
+	return p;
+#elif defined(HOST_64BIT)
+	void *p = malloc32(num * size);
+	if (p) memset(p, 0, num * size);
+	return p;
+#else
 	return calloc(num, size);
+#endif
 }
 REALIGN void *malloc_wrap(size_t num)
 {
+#if defined(HOST_64BIT) && !defined(__aarch64__) && !defined(__powerpc64__) && !defined(__PPC64__)
+	void *p = mmap_low(num);
+	return (p == MAP_FAILED) ? NULL : p;
+#elif defined(HOST_64BIT)
+	return malloc32(num);
+#else
 	return malloc(num);
+#endif
 }
 REALIGN void free_wrap(void *ptr)
 {
+#if defined(HOST_64BIT)
+	// On x86_64 with MAP_32BIT we can't munmap (don't know the size).
+	// On ARM64/PPC64 the pool allocator tracks every block, so free properly.
+#if defined(__aarch64__) || defined(__powerpc64__) || defined(__PPC64__)
+	free32(ptr);
+#else
+	(void)ptr;
+#endif
+#else
 	free(ptr);
+#endif
 }
 REALIGN time_t time_wrap(time_t *timer)
 {

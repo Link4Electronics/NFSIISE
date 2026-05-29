@@ -8,7 +8,33 @@
 #include <SDL2/SDL_joystick.h>
 #include <SDL2/SDL_haptic.h>
 
+#include <stdint.h>
+
 #define DIRECTINPUT_VERSION 0x0500
+
+#if defined(HOST_64BIT)
+	/* On x64 the game reads vtable entries as 4-byte values (to32i).
+	   Store only the low 32 bits of each wrapper address here. */
+	typedef uint32_t DInputVFunc;
+#else
+	/* On x86 native function pointers are already 4 bytes. */
+	typedef uint32_t (STDCALL *DInputVFunc)();
+#endif
+
+/* Store a function pointer into a DInputVFunc slot.
+   On x64 this truncates to 32 bits (safe: wrappers are in low 4GB). */
+#if defined(HOST_64BIT)
+#define DINPUT_SET_VTABLE(slot, func)  ((slot) = (uint32_t)(uintptr_t)(func))
+#else
+#define DINPUT_SET_VTABLE(slot, func)  ((slot) = (func))
+#endif
+
+/* Convert a 32-bit stored game pointer to a 64-bit host pointer. */
+#if defined(HOST_64BIT)
+#define DINPUT_ADDR(type, val)  ((type *)(uintptr_t)(val))
+#else
+#define DINPUT_ADDR(type, val)  ((type *)(val))
+#endif
 
 typedef struct
 {
@@ -163,11 +189,19 @@ typedef struct
 	uint32_t triggerButton;
 	uint32_t triggerRepeatInterval;
 	uint32_t cAxes;
+#if defined(HOST_64BIT)
+	uint32_t rgdwAxes;
+	uint32_t rglDirection;
+	uint32_t envelope;
+	uint32_t cbTypeSpecificParams;
+	uint32_t typeSpecificParams;
+#else
 	uint32_t *rgdwAxes;
 	uint32_t *rglDirection;
 	DIENVELOPE *envelope;
 	uint32_t cbTypeSpecificParams;
 	void *typeSpecificParams;
+#endif
 } DIEFFECT;
 
 typedef void DIEFFESCAPE;
@@ -184,26 +218,26 @@ typedef struct
 typedef struct DirectInputEffect
 {
 	/*** IUnknown methods ***/
-	uint32_t (STDCALL *QueryInterface)(void **this, const IID *const riid, void **object);
-	uint32_t (STDCALL *AddRef)(void **this);
-	uint32_t (STDCALL *Release)(void **this);
+	DInputVFunc QueryInterface;
+	DInputVFunc AddRef;
+	DInputVFunc Release;
 	/*** IDirectInputEffect methods ***/
-	uint32_t (STDCALL *Initialize)(struct DirectInputEffect **this, void *hInstance, uint32_t, GUID *);
-	uint32_t (STDCALL *GetEffectGuid)(struct DirectInputEffect **this, const GUID *const);
-	uint32_t (STDCALL *GetParameters)(struct DirectInputEffect **this, DIEFFECT *, uint32_t);
-	uint32_t (STDCALL *SetParameters)(struct DirectInputEffect **this, const DIEFFECT *eff, uint32_t flags);
-	uint32_t (STDCALL *Start)(struct DirectInputEffect **this, uint32_t iterations, uint32_t flags);
-	uint32_t (STDCALL *Stop)(struct DirectInputEffect **this);
-	uint32_t (STDCALL *GetEffectStatus)(struct DirectInputEffect **this, uint32_t *);
-	uint32_t (STDCALL *Download)(struct DirectInputEffect **this);
-	uint32_t (STDCALL *Unload)(struct DirectInputEffect **this);
-	uint32_t (STDCALL *Escape)(struct DirectInputEffect **this, DIEFFESCAPE *);
+	DInputVFunc Initialize;
+	DInputVFunc GetEffectGuid;
+	DInputVFunc GetParameters;
+	DInputVFunc SetParameters;
+	DInputVFunc Start;
+	DInputVFunc Stop;
+	DInputVFunc GetEffectStatus;
+	DInputVFunc Download;
+	DInputVFunc Unload;
+	DInputVFunc Escape;
 	/* My variables */
 	GUID guid;
 
 	SDL_HapticEffect effect;
 	BOOL playing;
-	uint8_t *gain;
+	uint8_t gain;
 
 	// Rumble
 	SDL_Joystick *joy;
@@ -218,35 +252,35 @@ typedef struct DirectInputEffect
 typedef struct DirectInputDevice
 {
 	/*** IUnknown methods ***/
-	uint32_t (STDCALL *QueryInterface)(void **this, const IID *const riid, void **object);
-	uint32_t (STDCALL *AddRef)(void **this);
-	uint32_t (STDCALL *Release)(void **this);
+	DInputVFunc QueryInterface;
+	DInputVFunc AddRef;
+	DInputVFunc Release;
 	/*** IDirectInputDeviceA methods ***/
-	uint32_t (STDCALL *GetCapabilities)(struct DirectInputDevice **this, DIDEVCAPS *devCaps);
-	uint32_t (STDCALL *EnumObjects)(struct DirectInputDevice **this, void *callback, void *ref, uint32_t dwFlags);
-	uint32_t (STDCALL *GetProperty)(struct DirectInputDevice **this, const GUID *const rguidProp, DIPROPHEADER *pdiph);
-	uint32_t (STDCALL *SetProperty)(struct DirectInputDevice **this, const GUID *const rguidProp, const DIPROPHEADER *pdiph);
-	uint32_t (STDCALL *Acquire)(struct DirectInputDevice **this);
-	uint32_t (STDCALL *Unacquire)(struct DirectInputDevice **this);
-	uint32_t (STDCALL *GetDeviceState)(struct DirectInputDevice **this, uint32_t cbData, void *data);
-	uint32_t (STDCALL *GetDeviceData)(struct DirectInputDevice **this, uint32_t cbObjectData, DIDEVICEOBJECTDATA *rgdod, uint32_t *pdwInOut, uint32_t dwFlags);
-	uint32_t (STDCALL *SetDataFormat)(struct DirectInputDevice **this, const DIDATAFORMAT *df);
-	uint32_t (STDCALL *SetEventNotification)(struct DirectInputDevice **this, void *hEvent);
-	uint32_t (STDCALL *SetCooperativeLevel)(struct DirectInputDevice **this, void *hwnd, uint32_t dwFlags);
-	uint32_t (STDCALL *GetObjectInfo)(struct DirectInputDevice **this, DIDEVICEOBJECTINSTANCEA *pdidoi, uint32_t dwObj, uint32_t dwHow);
-	uint32_t (STDCALL *GetDeviceInfo)(struct DirectInputDevice **this, DIDEVICEINSTANCEA *pdidi);
-	uint32_t (STDCALL *RunControlPanel)(struct DirectInputDevice **this, void *hwndOwner, uint32_t dwFlags);
-	uint32_t (STDCALL *Initialize)(struct DirectInputDevice **this, void *hinst, uint32_t dwVersion, const GUID *const rguid);
+	DInputVFunc GetCapabilities;
+	DInputVFunc EnumObjects;
+	DInputVFunc GetProperty;
+	DInputVFunc SetProperty;
+	DInputVFunc Acquire;
+	DInputVFunc Unacquire;
+	DInputVFunc GetDeviceState;
+	DInputVFunc GetDeviceData;
+	DInputVFunc SetDataFormat;
+	DInputVFunc SetEventNotification;
+	DInputVFunc SetCooperativeLevel;
+	DInputVFunc GetObjectInfo;
+	DInputVFunc GetDeviceInfo;
+	DInputVFunc RunControlPanel;
+	DInputVFunc Initialize;
 	/*** IDirectInputDevice2A methods ***/
-	uint32_t (STDCALL *CreateEffect)(struct DirectInputDevice **this, const GUID *const rguid, const DIEFFECT *eff, DirectInputEffect ***deff, void *punkOuter);
-	uint32_t (STDCALL *EnumEffects)(struct DirectInputDevice **this, void *callback, void *pvRef, uint32_t effType);
-	uint32_t (STDCALL *GetEffectInfo)(struct DirectInputDevice **this, DIEFFECTINFOA *pdei, const GUID *const rguid);
-	uint32_t (STDCALL *GetForceFeedbackState)(struct DirectInputDevice **this, uint32_t *out);
-	uint32_t (STDCALL *SendForceFeedbackCommand)(struct DirectInputDevice **this, uint32_t flags);
-	uint32_t (STDCALL *EnumCreatedEffectObjects)(struct DirectInputDevice **this, void *callback, void *pvRef, uint32_t fl);
-	uint32_t (STDCALL *Escape)(struct DirectInputDevice **this, DIEFFESCAPE *pesc);
-	uint32_t (STDCALL *Poll)(struct DirectInputDevice **this );
-	uint32_t (STDCALL *SendDeviceData)(struct DirectInputDevice **this, uint32_t cbObjectData, const DIDEVICEOBJECTDATA *rgdod, uint32_t *inOut, uint32_t fl);
+	DInputVFunc CreateEffect;
+	DInputVFunc EnumEffects;
+	DInputVFunc GetEffectInfo;
+	DInputVFunc GetForceFeedbackState;
+	DInputVFunc SendForceFeedbackCommand;
+	DInputVFunc EnumCreatedEffectObjects;
+	DInputVFunc Escape;
+	DInputVFunc Poll;
+	DInputVFunc SendDeviceData;
 	/* My variables */
 	GUID guid;
 	uint32_t lastX, lastY;
@@ -263,15 +297,15 @@ typedef struct DirectInputDevice
 typedef struct
 {
 	/*** IUnknown methods ***/
-	uint32_t (STDCALL *QueryInterface)(void **this, const IID *const riid, void **object);
-	uint32_t (STDCALL *AddRef)(void **this);
-	uint32_t (STDCALL *Release)(void **this);
+	DInputVFunc QueryInterface;
+	DInputVFunc AddRef;
+	DInputVFunc Release;
 	/*** IDirectInputA methods ***/
-	uint32_t (STDCALL *CreateDevice)(void **this, const GUID *const rguid, DirectInputDevice ***directInputDevice, void *unkOuter);
-	uint32_t (STDCALL *EnumDevices)(void **this, uint32_t devType, DIENUMDEVICESCALLBACKA callback, void *ref, uint32_t dwFlags);
-	uint32_t (STDCALL *GetDeviceStatus)(void **this, const GUID *const rguidInstance);
-	uint32_t (STDCALL *RunControlPanel)(void **this, void *hwndOwner, uint32_t dwFlags);
-	uint32_t (STDCALL *Initialize)(void **this, void *hInstance, uint32_t dwVersion);
+	DInputVFunc CreateDevice;
+	DInputVFunc EnumDevices;
+	DInputVFunc GetDeviceStatus;
+	DInputVFunc RunControlPanel;
+	DInputVFunc Initialize;
 } DirectInput;
 
 #endif // DINPUT_H

@@ -1,12 +1,11 @@
+build/
+*.o
+*.obj
+*.exe
 .DS_Store
-Need For Speed II SE/gamedata
-Need For Speed II SE/fedata
+Thumbs.db
+
+# Game data (must be copied from CD-ROM)
+Need For Speed II SE/fedata/
+Need For Speed II SE/gamedata/
 Need For Speed II SE/nfs2se
-Need For Speed II SE/*.dll
-Need For Speed II SE/*.exe
-Need For Speed II SE/*.so
-src/*.o
-src/Android/.gradle
-src/Android/app/build
-src/Android/app/jni/SDL
-src/Android/app/src/main/AndroidManifest.xml

@@ -2,7 +2,9 @@
 
 #include "Kernel32.h"
 
+#include <stdio.h>
 #include <SDL2/SDL_timer.h>
+#include "Cpp/ByteUtils.h"
 
 void exit_func();
 
@@ -91,7 +93,7 @@ REALIGN STDCALL HANDLE CreateFileA_wrap(const char *fileName, uint32_t desiredAc
 	else
 		tmpFileName = convertFilePath(fileName, false);
 	handle = CreateFileA(tmpFileName, desiredAccess, shareMode, securityAttributes, creationDisposition, flagsAndAttributes, templateFile);
-	free(tmpFileName);
+	free32(tmpFileName);
 	return handle;
 }
 REALIGN STDCALL HANDLE CreateFileMappingA_wrap(HANDLE hFile, SECURITY_ATTRIBUTES *fileMappingAttributes, uint32_t flProtect, uint32_t dwMaximumSizeHigh, uint32_t dwMaximumSizeLow, const char *lpName)
@@ -154,7 +156,7 @@ REALIGN STDCALL BOOL DeleteFileA_wrap(const char *fileName)
 {
 	char *tmpFileName = convertFilePath(fileName, false);
 	BOOL ret = DeleteFileA(tmpFileName);
-	free(tmpFileName);
+	free32(tmpFileName);
 	return ret;
 }
 REALIGN STDCALL void *GetModuleHandleA_wrap(const char *moduleName)
@@ -197,7 +199,7 @@ REALIGN STDCALL BOOL SetCurrentDirectoryA_wrap(const char *pathName)
 {
 	char *tmpPathName = convertFilePath(pathName, false);
 	BOOL ret = SetCurrentDirectoryA(tmpPathName);
-	free(tmpPathName);
+	free32(tmpPathName);
 	return ret;
 }
 REALIGN STDCALL BOOL FindNextFileA_wrap(void *findFile, WIN32_FIND_DATAA *findFileData)
@@ -238,7 +240,7 @@ static int threadFunction(void *data)
 
 REALIGN STDCALL void *CreateThread_wrap(void *threadAttributes, uint32_t stackSize, THREAD_START_ROUTINE startAddress, void *parameter, uint32_t creationFlags, uint32_t *threadId)
 {
-	Thread *thread = (Thread *)malloc(sizeof(Thread));
+	Thread *thread = (Thread *)malloc32(sizeof(Thread));
 	thread->handleType = HandleThread;
 #ifdef NFS_CPP
 	thread->function = startAddress;
@@ -276,24 +278,29 @@ REALIGN STDCALL BOOL TerminateThread_wrap(Thread *thread, uint32_t exitCode)
 }
 REALIGN STDCALL void InitializeCriticalSection_wrap(CRITICAL_SECTION *criticalSection)
 {
-	criticalSection->mutex = SDL_CreateMutex();
+	fprintf(stderr, "InitializeCriticalSection_wrap(%p)\n", (void *)criticalSection);
+	criticalSection->m.mutex = SDL_CreateMutex();
 }
 REALIGN STDCALL void EnterCriticalSection_wrap(CRITICAL_SECTION *criticalSection)
 {
-	SDL_LockMutex(criticalSection->mutex);
+	SDL_LockMutex(criticalSection->m.mutex);
 }
 REALIGN STDCALL void LeaveCriticalSection_wrap(CRITICAL_SECTION *criticalSection)
 {
-	SDL_UnlockMutex(criticalSection->mutex);
+	SDL_UnlockMutex(criticalSection->m.mutex);
 }
 REALIGN STDCALL void DeleteCriticalSection_wrap(CRITICAL_SECTION *criticalSection)
 {
-	SDL_DestroyMutex(criticalSection->mutex);
-	criticalSection->mutex = NULL;
+	if (criticalSection->m.mutex)
+	{
+		SDL_DestroyMutex(criticalSection->m.mutex);
+		criticalSection->m.mutex = NULL;
+	}
 }
 
-REALIGN STDCALL void GlobalMemoryStatus_wrap(MEMORYSTATUS *memoryStatus)
+REALIGN STDCALL int32_t GlobalMemoryStatus_wrap(int32_t arg0)
 {
+	MEMORYSTATUS *memoryStatus = (MEMORYSTATUS *)(uintptr_t)(uint32_t)arg0;
 	memset(memoryStatus, 0, sizeof(MEMORYSTATUS));
 	memoryStatus->length = sizeof(MEMORYSTATUS);
 	memoryStatus->memoryLoad = 0;
@@ -302,6 +309,7 @@ REALIGN STDCALL void GlobalMemoryStatus_wrap(MEMORYSTATUS *memoryStatus)
 	memoryStatus->availPageFile = 0x7FFFFFFF;
 	memoryStatus->totalVirtual = 0x7FFFFFFF;
 	memoryStatus->availVirtual = 0x7FFFFFFF;
+	return 0;
 }
 
 REALIGN STDCALL void ExitProcess_wrap(uint32_t exitCode)
@@ -328,7 +336,7 @@ REALIGN STDCALL uint32_t GetLastError_wrap(void)
 
 REALIGN STDCALL Event *CreateEventA_wrap(SECURITY_ATTRIBUTES *eventAttributes, BOOL manualReset, BOOL initialState, const char *name)
 {
-	Event *event = (Event *)malloc(sizeof(Event));
+	Event *event = (Event *)malloc32(sizeof(Event));
 	event->handleType = HandleEvent;
 	event->manualReset = manualReset;
 	event->is_set = initialState;
@@ -356,6 +364,19 @@ REALIGN STDCALL uint32_t WaitForMultipleObjects_wrap(uint32_t count, Event *cons
 	{
 		for (i = 0; i != count; ++i)
 		{
+#if defined(HOST_64BIT)
+			/* events points to x86 LE memory which stores 4-byte pointers.
+			   Read each entry as little-endian uint32_t and zero-extend. */
+			const unsigned char *ev_bytes = (const unsigned char *)events;
+			Event *ev = (Event *)(uintptr_t)read32le(ev_bytes + (ptrdiff_t)i * 4);
+			if (ev->is_set)
+			{
+				if (ret == WAIT_TIMEOUT)
+					ret = i;
+				if (!ev->manualReset)
+					ev->is_set = false;
+			}
+#else
 			if (events[i]->is_set)
 			{
 				if (ret == WAIT_TIMEOUT)
@@ -363,6 +384,7 @@ REALIGN STDCALL uint32_t WaitForMultipleObjects_wrap(uint32_t count, Event *cons
 				if (!events[i]->manualReset)
 					events[i]->is_set = false;
 			}
+#endif
 		}
 		if (ret != WAIT_TIMEOUT || !milliseconds)
 			break;
@@ -448,14 +470,19 @@ REALIGN STDCALL File *CreateFileA_wrap(const char *fileName, uint32_t desiredAcc
 	}
 	if (fd > 0)
 	{
+#if defined(HOST_64BIT)
+		file = (File *)malloc32(sizeof(File));
+		memset(file, 0, sizeof(File));
+#else
 		file = calloc(1, sizeof(File));
+#endif
 		file->handleType = HandleFile;
 		if ((file->async = !!(flagsAndAttributes & 0x40000000 /* Overlapped, async mode */)))
 			file->mutex = SDL_CreateMutex();
 		file->fd = fd;
 	}
 
-	free(tmpFileName);
+	free32(tmpFileName);
 
 	return file ? file : (File *)-1;
 }
@@ -468,7 +495,7 @@ REALIGN STDCALL uint32_t GetFileSize_wrap(File *file, uint32_t *fileSizeHigh)
 }
 REALIGN STDCALL FileMapping *CreateFileMappingA_wrap(File *file, SECURITY_ATTRIBUTES *fileMappingAttributes, uint32_t protect, uint32_t maximumSizeHigh, uint32_t maximumSizeLow, const char *name)
 {
-	FileMapping *fileMapping = (FileMapping *)malloc(sizeof(FileMapping));
+	FileMapping *fileMapping = (FileMapping *)malloc32(sizeof(FileMapping));
 	fileMapping->handleType = HandleFileMapping;
 	fileMapping->fd = file->fd;
 	return fileMapping;
@@ -482,7 +509,7 @@ REALIGN STDCALL void *MapViewOfFile_wrap(FileMapping *fMapping, uint32_t desired
 	{
 		off_t pos = lseek(fMapping->fd, 0, SEEK_CUR);
 		lseek(fMapping->fd, 0, SEEK_SET);
-		fileMap = malloc(size + 4);
+		fileMap = malloc32(size + 4);
 		read(fMapping->fd, fileMap, size);
 		lseek(fMapping->fd, pos, SEEK_SET);
 	}
@@ -490,7 +517,7 @@ REALIGN STDCALL void *MapViewOfFile_wrap(FileMapping *fMapping, uint32_t desired
 }
 REALIGN STDCALL BOOL UnmapViewOfFile_wrap(const void *lpBaseAddress)
 {
-	free((void *)lpBaseAddress);
+	free32((void *)lpBaseAddress);
 	return true;
 }
 REALIGN STDCALL BOOL FlusfileBuffers_wrap(File *file)
@@ -601,7 +628,7 @@ REALIGN STDCALL BOOL DeleteFileA_wrap(const char *fileName)
 {
 	char *tmpFileName = convertFilePath(fileName, true);
 	BOOL ret = !unlink(tmpFileName);
-	free(tmpFileName);
+	free32(tmpFileName);
 	return ret;
 }
 
@@ -618,7 +645,7 @@ REALIGN STDCALL BOOL CloseHandle_wrap(void *handle)
 		case HandleThread:
 		{
 			Thread *thread = (Thread *)handle;
-			free(thread);
+			free32(thread);
 			return true;
 		}
 		case HandleFile:
@@ -630,19 +657,19 @@ REALIGN STDCALL BOOL CloseHandle_wrap(void *handle)
 			while (file->pending) //Cannot wait for finished, because thread is detached
 				SDL_Delay(10);
 			SDL_DestroyMutex(file->mutex);
-			free(file);
+			free32(file);
 			return true;
 		}
 		case HandleFileMapping:
 		{
 			FileMapping *fMapping = (FileMapping *)handle;
-			free(fMapping);
+			free32(fMapping);
 			return true;
 		}
 		case HandleEvent:
 		{
 			Event *event = (Event *)handle;
-			free(event);
+			free32(event);
 			return true;
 		}
 	}
@@ -660,10 +687,19 @@ REALIGN STDCALL void *GetCurrentProcess_wrap(void)
 	return NULL;
 }
 
-REALIGN STDCALL void GetSystemInfo_wrap(SYSTEM_INFO *systemInfo)
+/* NOTE: the transpiled code declares GetSystemInfo_wrap as
+   extern "C" int32_t (int32_t arg0).  On PPC64 the upper 32 bits of
+   the argument register are undefined for int32_t parameters.  We must
+   zero-extend to get a valid pointer. */
+REALIGN STDCALL int32_t GetSystemInfo_wrap(int32_t arg0)
 {
-	memset(systemInfo, 0, sizeof(SYSTEM_INFO));
-	systemInfo->pageSize = getpagesize();
+	uintptr_t ptr = (uintptr_t)(uint32_t)arg0;
+	SYSTEM_INFO si;
+	memset(&si, 0, sizeof(si));
+	si.pageSize = getpagesize();
+	if (ptr)
+		*(SYSTEM_INFO *)ptr = si;
+	return 0;
 }
 
 REALIGN STDCALL uint32_t GetCurrentDirectoryA_wrap(uint32_t bufferLength, char *buffer)
@@ -676,7 +712,7 @@ REALIGN STDCALL BOOL SetCurrentDirectoryA_wrap(const char *pathName)
 {
 	char *tmpPathName = convertFilePath(pathName, false);
 	BOOL ret = !chdir(tmpPathName);
-	free(tmpPathName);
+	free32(tmpPathName);
 	return ret;
 }
 
@@ -702,8 +738,8 @@ REALIGN STDCALL BOOL FindClose_wrap(FindFile *findFile)
 	{
 		if (findFile->dir)
 			closedir(findFile->dir);
-		free(findFile->filter);
-		free(findFile);
+		free32(findFile->filter);
+		free32(findFile);
 		return true;
 	}
 	return false;
@@ -719,7 +755,7 @@ REALIGN STDCALL FindFile *FindFirstFileA_wrap(const char *fileName, WIN32_FIND_D
 	if (!dir)
 		return (FindFile *)-1;
 
-	FindFile *findFile = (FindFile *)malloc(sizeof(FindFile));
+	FindFile *findFile = (FindFile *)malloc32(sizeof(FindFile));
 	findFile->dir = dir;
 	findFile->filter = strdup(fileName);
 

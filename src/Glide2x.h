@@ -271,8 +271,12 @@ typedef int32_t GrOriginLocation_t;
 
 typedef struct {
     int                size;
+#if defined(HOST_64BIT)
+    uint32_t           lfbPtr;
+#else
     void               *lfbPtr;
-    uint32_t              strideInBytes;
+#endif
+    uint32_t           strideInBytes;
     GrLfbWriteMode_t   writeMode;
     GrOriginLocation_t origin;
 } GrLfbInfo_t;
@@ -409,7 +413,11 @@ typedef struct {
     GrLOD_t           largeLod;
     GrAspectRatio_t   aspectRatio;
     GrTextureFormat_t format;
+#if defined(HOST_64BIT)
+    uint32_t          data;
+#else
     void              *data;
+#endif
 } GrTexInfo;
 
 typedef struct

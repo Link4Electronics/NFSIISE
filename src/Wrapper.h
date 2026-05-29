@@ -23,6 +23,14 @@
 
 	#define MAYBE_THIS_SINGLE void
 	#define MAYBE_THIS
+#elif !defined(NFS_CPP) && (defined(__x86_64__) || defined(__amd64__) || defined(__aarch64__) || defined(__powerpc64__) || defined(__PPC64__))
+	#define STDCALL
+	#define REGPARM
+
+	#define MAYBE_THIS_SINGLE void *this
+	#define MAYBE_THIS void *this,
+
+	#define NFS_CPP
 #else
 	#define STDCALL
 	#define REGPARM
@@ -50,5 +58,41 @@
 typedef uint32_t (STDCALL *WindowProc)(MAYBE_THIS void *hWnd, uint32_t uMsg, uint32_t wParam, uint32_t lParam);
 
 char *convertFilePath(const char *srcPth, BOOL convToLower);
+
+#if defined(__x86_64__) || defined(__aarch64__) || defined(__powerpc64__) || defined(__PPC64__) || defined(__LP64__)
+#define HOST_64BIT
+void *malloc32(size_t size);
+void free32(void *p);
+void pool_preallocate(void);
+#else
+static inline void *malloc32(size_t size) { return malloc(size); }
+static inline void free32(void *p) { free(p); }
+#endif
+
+/* ------  Big-endian host detection  ------------------------------------ */
+#if !defined(__ORDER_LITTLE_ENDIAN__)
+#define __ORDER_LITTLE_ENDIAN__ 1234
+#endif
+#if !defined(__ORDER_BIG_ENDIAN__)
+#define __ORDER_BIG_ENDIAN__ 4321
+#endif
+
+#if defined(__BYTE_ORDER__)
+#define HOST_BYTE_ORDER __BYTE_ORDER__
+#elif defined(__BYTE_ORDER) && defined(__LITTLE_ENDIAN) && defined(__BIG_ENDIAN)
+#define HOST_BYTE_ORDER __BYTE_ORDER
+#elif defined(BYTE_ORDER) && defined(LITTLE_ENDIAN) && defined(BIG_ENDIAN)
+#define HOST_BYTE_ORDER BYTE_ORDER
+#elif defined(__BIG_ENDIAN__)
+#define HOST_BYTE_ORDER __ORDER_BIG_ENDIAN__
+#elif defined(__LITTLE_ENDIAN__)
+#define HOST_BYTE_ORDER __ORDER_LITTLE_ENDIAN__
+#endif
+
+#if defined(HOST_BYTE_ORDER) && (HOST_BYTE_ORDER == __ORDER_BIG_ENDIAN__)
+#ifndef HOST_BIG_ENDIAN
+#define HOST_BIG_ENDIAN
+#endif
+#endif
 
 #endif // WRAPPER_H

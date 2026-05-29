@@ -1,6 +1,13 @@
 // SPDX-License-Identifier: MIT
 
 #include "Wrapper.h"
+#include <stdlib.h>
+#include <string.h>
+
+#ifdef HOST_64BIT
+extern void *malloc32(size_t);
+extern void free32(void *);
+#endif
 
 extern BOOL linearSoundInterpolation;
 
@@ -12,9 +19,9 @@ static void (REGPARM *getSamples)(void *samples, uint32_t num_samples_per_chn);
 
 	#define getSamplesFunc(a,b) \
 		wrap_regparm2(audio_game_thread, getSamples, a, b)
-#else
-	#define getSamplesFunc(a,b) \
-		getSamples(a, b)
+
+	static void *audio_stack;
+	static const unsigned long audio_stack_size = 0x10000;
 #endif
 
 typedef void (*FadeInOut)(MAYBE_THIS_SINGLE);
@@ -96,6 +103,19 @@ REALIGN REGPARM uint32_t iSNDdirectstart_(uint32_t arg1, void *hWnd)
 	if (canGetSamples)
 		return 0;
 
+#ifdef NFS_CPP
+	if (!audio_stack && audio_game_thread)
+	{
+		audio_stack = malloc32(audio_stack_size);
+		if (audio_stack)
+		{
+			memset(audio_stack, 0, audio_stack_size);
+			uint32_t esp_val = (uint32_t)(uintptr_t)audio_stack + 0x100;
+			*(uint32_t *)((uint8_t *)audio_game_thread + 24) = esp_val;
+		}
+	}
+#endif
+
 	SDL_AudioSpec audioSpecIn =
 	{
 		linearSoundInterpolation ? 44100 : 22050,
@@ -111,16 +131,24 @@ REALIGN REGPARM uint32_t iSNDdirectstart_(uint32_t arg1, void *hWnd)
 	SDL_AudioSpec audioSpecOut;
 	audioDevice = SDL_OpenAudioDevice(NULL, 0, &audioSpecIn, &audioSpecOut, 0);
 	if (!audioDevice)
+#if defined(HOST_64BIT)
+		buffer = (uint8_t *)malloc32(256 * CHN_CNT * sizeof(int16_t));
+#else
 		buffer = (uint8_t *)malloc(256 * CHN_CNT * sizeof(int16_t));
+#endif
 	else
 	{
 		uint32_t bufferSize = (audioSpecOut.samples + 255) & ~255; //Aligned to 256
+#if defined(HOST_64BIT)
+		bufferSize += 256;
+		buffer = (uint8_t *)malloc32(bufferSize * CHN_CNT * sizeof(int16_t));
+#else
 		if (linearSoundInterpolation || bufferSize != audioSpecOut.samples)
 		{
 			bufferSize += linearSoundInterpolation ? 512 : 256;
-			bufferSize *= CHN_CNT * sizeof(int16_t);
-			buffer = (uint8_t *)malloc(bufferSize);
+			buffer = (uint8_t *)malloc(bufferSize * CHN_CNT * sizeof(int16_t));
 		}
+#endif
 	}
 	canGetSamples = true;
 	return 0;
@@ -153,7 +181,18 @@ REALIGN uint32_t iSNDdirectstop_(void)
 		audioDevice = 0;
 	}
 	buffer_pos = 0;
+#if defined(HOST_64BIT)
+	free32(buffer);
+#else
 	free(buffer);
+#endif
 	buffer = NULL;
+#ifdef NFS_CPP
+	if (audio_stack)
+	{
+		free32(audio_stack);
+		audio_stack = NULL;
+	}
+#endif
 	return 0;
 }

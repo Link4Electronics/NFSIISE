@@ -1,6 +1,12 @@
 // SPDX-License-Identifier: MIT
 
 #include "../Glide2x.h"
+#include <stdlib.h>
+
+#if defined(HOST_64BIT)
+extern void *malloc32(size_t);
+extern void free32(void *);
+#endif
 
 #include <SDL2/SDL_stdinc.h>
 #include <SDL2/SDL_opengl.h>
@@ -257,7 +263,12 @@ REALIGN STDCALL BOOL grLfbLock(GrLock_t type, GrBuffer_t buffer, GrLfbWriteMode_
 	memset(info, 0, sizeof(GrLfbInfo_t));
 	if (type == GR_LFB_WRITE_ONLY)
 	{
+#if defined(HOST_64BIT)
+		lfb = (uint8_t *)malloc32(640*480*2);
+		info->lfbPtr = (uint32_t)(uintptr_t)lfb;
+#else
 		info->lfbPtr = lfb = (uint8_t *)malloc(640*480*2);
+#endif
 		info->strideInBytes = 2;
 		return true;
 	}
@@ -266,7 +277,11 @@ REALIGN STDCALL BOOL grLfbLock(GrLock_t type, GrBuffer_t buffer, GrLfbWriteMode_
 REALIGN STDCALL BOOL grLfbUnlock(GrLock_t type, GrBuffer_t buffer)
 {
 	//TODO Remove this
+#if defined(HOST_64BIT)
+	free32(lfb);
+#else
 	free(lfb);
+#endif
 	lfb = NULL;
 	return true;
 }

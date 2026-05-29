@@ -137,7 +137,17 @@ REALIGN STDCALL BOOL GetMessageA_wrap(MSG *msg, void *hWnd, uint32_t wMsgFilterM
 					if (event.key.keysym.sym == SDLK_RETURN && (event.key.keysym.mod & KMOD_LALT))
 					{
 						if (!event.key.repeat)
+						{
 							SDL_SetWindowFullscreen(sdlWin, (SDL_GetWindowFlags(sdlWin) & fullScreenFlag) ? SDL_FALSE : fullScreenFlag);
+							/* Force window-size update — some WMs (Plasma, etc.)
+							   may not send SDL_WINDOWEVENT_RESIZED reliably after a
+							   fullscreen→windowed transition, leaving winWidth/
+							   winHeight stale and the image cropped. */
+							SDL_GetWindowSize(sdlWin, &winWidth, &winHeight);
+							winWidth  *= dpr;
+							winHeight *= dpr;
+							windowResized = true;
+						}
 						br = false;
 						break;
 					}

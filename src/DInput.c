@@ -325,7 +325,7 @@ static void maybeRestartEffect(DirectInputEffect *eff)
 	if (eff->joy)
 	{
 		const SDL_HapticLeftRight *lr = &eff->effect.leftright;
-		uint32_t gain = SDL_min(*eff->gain, 100u);
+		uint32_t gain = SDL_min(eff->gain, 100u);
 		if (gain > 0)
 		{
 			SDL_JoystickRumble(eff->joy, lr->large_magnitude * gain / 100, lr->small_magnitude * gain / 100, lr->length);
@@ -363,7 +363,7 @@ static void setEffect(DirectInputEffect *dinputEffect, const DIEFFECT *di_eff)
 	{
 		case FORCE_CONST:
 		{
-			const DICONSTANTFORCE *di_constant = (const DICONSTANTFORCE *)di_eff->typeSpecificParams;
+			const DICONSTANTFORCE *di_constant = DINPUT_ADDR(const DICONSTANTFORCE, di_eff->typeSpecificParams);
 			switch (dinputEffect->effect.type)
 			{
 				case SDL_HAPTIC_CONSTANT:
@@ -374,7 +374,7 @@ static void setEffect(DirectInputEffect *dinputEffect, const DIEFFECT *di_eff)
 					if (dinputEffect->useCartesian)
 					{
 						sdl_constant->direction.type = SDL_HAPTIC_CARTESIAN;
-						int32_t direction = di_eff->rglDirection[0] / 100;
+						int32_t direction = DINPUT_ADDR(const uint32_t, di_eff->rglDirection)[0] / 100;
 	//					fprintf(stderr, "Constant: %d\n", direction);
 						if (direction > 0 && direction < 180)
 						{
@@ -413,7 +413,7 @@ static void setEffect(DirectInputEffect *dinputEffect, const DIEFFECT *di_eff)
 					else
 					{
 						sdl_constant->direction.type = SDL_HAPTIC_POLAR;
-						sdl_constant->direction.dir[0] = di_eff->rglDirection[0];
+						sdl_constant->direction.dir[0] = DINPUT_ADDR(const uint32_t, di_eff->rglDirection)[0];
 					}
 					break;
 				}
@@ -434,7 +434,7 @@ static void setEffect(DirectInputEffect *dinputEffect, const DIEFFECT *di_eff)
 		}
 		case FORCE_SQUARE:
 		{
-			const DIPERIODIC *di_periodic = (const DIPERIODIC *)di_eff->typeSpecificParams;
+			const DIPERIODIC *di_periodic = DINPUT_ADDR(const DIPERIODIC, di_eff->typeSpecificParams);
 			switch (dinputEffect->effect.type)
 			{
 				case SDL_HAPTIC_SINE:
@@ -462,7 +462,7 @@ static void setEffect(DirectInputEffect *dinputEffect, const DIEFFECT *di_eff)
 		}
 		case FORCE_SPRING:
 		{
-			const DICONDITION *di_condition = (const DICONDITION *)di_eff->typeSpecificParams;
+			const DICONDITION *di_condition = DINPUT_ADDR(const DICONDITION, di_eff->typeSpecificParams);
 			SDL_HapticCondition *sdl_condition = &dinputEffect->effect.condition;
 			sdl_condition->length = length;
 			sdl_condition->center[0] = convertDiToS16(di_condition[0].offset);
@@ -538,7 +538,11 @@ MAYBE_STATIC REALIGN STDCALL uint32_t Release(void **this)
 
 			int32_t i;
 			for (i = 0; i != dinputDev->num_effects; ++i)
+#if defined(HOST_64BIT)
+				free32((void *)dinputDev->effects[i] - sizeof(DirectInputObject));
+#else
 				free((void *)dinputDev->effects[i] - sizeof(DirectInputObject));
+#endif
 			free(dinputDev->effects);
 
 			if (dinputDev->haptic)
@@ -551,8 +555,13 @@ MAYBE_STATIC REALIGN STDCALL uint32_t Release(void **this)
 		}
 	}
 
+#if defined(HOST_64BIT)
+	free32(dinputObj);
+	free32(this);
+#else
 	free(dinputObj);
 	free(this);
+#endif
 
 //	fprintf(stderr, "Release: 0x%p\n", *this);
 	return 0;
@@ -826,27 +835,41 @@ MAYBE_STATIC REALIGN STDCALL uint32_t SetCooperativeLevel(DirectInputDevice **th
 MAYBE_STATIC REALIGN STDCALL uint32_t CreateEffect(DirectInputDevice **this, const GUID *const rguid, const DIEFFECT *di_eff, DirectInputEffect ***deff, void *punkOuter)
 {
 	/* Joystick only */
+#if defined(HOST_64BIT)
+	DirectInputEffect *dinput_eff = (DirectInputEffect *)malloc32(sizeof(DirectInputObject) + sizeof(DirectInputEffect));
+	memset(dinput_eff, 0, sizeof(DirectInputObject) + sizeof(DirectInputEffect));
+#else
 	DirectInputEffect *dinput_eff = (DirectInputEffect *)calloc(1, sizeof(DirectInputObject) + sizeof(DirectInputEffect));
+#endif
 	((DirectInputObject *)dinput_eff)->ref = 1;
 	dinput_eff = (void *)dinput_eff + sizeof(DirectInputObject);
-	dinput_eff->gain = &(*this)->gain;
+	dinput_eff->gain = (*this)->gain;
 	dinput_eff->effect_idx = -1;
 
-	dinput_eff->SetParameters = WRAP_NAME(SetParameters);
-	dinput_eff->Start = WRAP_NAME(Start);
-	dinput_eff->Stop = WRAP_NAME(Stop);
-	dinput_eff->Download = WRAP_NAME(Download);
-	dinput_eff->Unload = WRAP_NAME(Unload);
+	DINPUT_SET_VTABLE(dinput_eff->SetParameters, WRAP_NAME(SetParameters));
+	DINPUT_SET_VTABLE(dinput_eff->Start, WRAP_NAME(Start));
+	DINPUT_SET_VTABLE(dinput_eff->Stop, WRAP_NAME(Stop));
+	DINPUT_SET_VTABLE(dinput_eff->Download, WRAP_NAME(Download));
+	DINPUT_SET_VTABLE(dinput_eff->Unload, WRAP_NAME(Unload));
 
-	memcpy(&dinput_eff->guid, rguid, sizeof(GUID));
+	if (rguid)
+		memcpy(&dinput_eff->guid, rguid, sizeof(GUID));
 
 	maybeInitEffect(*this, dinput_eff);
 	setEffect(dinput_eff, di_eff);
 
 //	fprintf(stderr, "%X %X %d\n", dinputEff->guid.a, dinputEff->effect.type, dinputEff->effect_idx);
 
+#if defined(HOST_64BIT)
+	{
+		void *buf = malloc32(sizeof(void *));
+		*(uint32_t *)deff = (uint32_t)(uintptr_t)buf;
+		*(void **)(uintptr_t)(uint32_t)(uintptr_t)buf = (void *)(uintptr_t)(uint32_t)(uintptr_t)dinput_eff;
+	}
+#else
 	*deff = malloc(sizeof(void *));
 	**deff = dinput_eff;
+#endif
 
 	(*this)->num_effects += 1;
 
@@ -905,27 +928,33 @@ MAYBE_STATIC REALIGN STDCALL uint32_t Poll(DirectInputDevice **this)
 
 MAYBE_STATIC REALIGN STDCALL uint32_t CreateDevice(void **this, const GUID *const rguid, DirectInputDevice ***directInputDevice, void *unkOuter)
 {
+#if defined(HOST_64BIT)
+	DirectInputDevice *dinputDev = (DirectInputDevice *)malloc32(sizeof(DirectInputObject) + sizeof(DirectInputDevice));
+	memset(dinputDev, 0, sizeof(DirectInputObject) + sizeof(DirectInputDevice));
+#else
 	DirectInputDevice *dinputDev = (DirectInputDevice *)calloc(1, sizeof(DirectInputObject) + sizeof(DirectInputDevice));
+#endif
 	((DirectInputObject *)dinputDev)->ref = 1;
 	((DirectInputObject *)dinputDev)->is_device = true;
 	dinputDev = (void *)dinputDev + sizeof(DirectInputObject);
 
-	dinputDev->QueryInterface = WRAP_NAME(QueryInterface);
-	dinputDev->Release = WRAP_NAME(Release);
+	DINPUT_SET_VTABLE(dinputDev->QueryInterface, WRAP_NAME(QueryInterface));
+	DINPUT_SET_VTABLE(dinputDev->Release, WRAP_NAME(Release));
 
-	dinputDev->GetCapabilities = WRAP_NAME(GetCapabilities);
-	dinputDev->SetProperty = WRAP_NAME(SetProperty);
-	dinputDev->Acquire = WRAP_NAME(Acquire);
-	dinputDev->Unacquire = WRAP_NAME(Unacquire);
-	dinputDev->GetDeviceState = WRAP_NAME(GetDeviceState);
-	dinputDev->GetDeviceData = WRAP_NAME(GetDeviceData);
-	dinputDev->SetDataFormat = WRAP_NAME(SetDataFormat);
-	dinputDev->SetEventNotification = WRAP_NAME(SetEventNotification);
-	dinputDev->SetCooperativeLevel = WRAP_NAME(SetCooperativeLevel);
-	dinputDev->GetObjectInfo = WRAP_NAME(GetObjectInfo);
-	dinputDev->CreateEffect = WRAP_NAME(CreateEffect);
-	dinputDev->SendForceFeedbackCommand = WRAP_NAME(SendForceFeedbackCommand);
-	dinputDev->Poll = WRAP_NAME(Poll);
+	DINPUT_SET_VTABLE(dinputDev->GetCapabilities, WRAP_NAME(GetCapabilities));
+	DINPUT_SET_VTABLE(dinputDev->SetProperty, WRAP_NAME(SetProperty));
+	DINPUT_SET_VTABLE(dinputDev->Acquire, WRAP_NAME(Acquire));
+	DINPUT_SET_VTABLE(dinputDev->Unacquire, WRAP_NAME(Unacquire));
+	DINPUT_SET_VTABLE(dinputDev->GetDeviceState, WRAP_NAME(GetDeviceState));
+	DINPUT_SET_VTABLE(dinputDev->GetDeviceData, WRAP_NAME(GetDeviceData));
+	DINPUT_SET_VTABLE(dinputDev->SetDataFormat, WRAP_NAME(SetDataFormat));
+	DINPUT_SET_VTABLE(dinputDev->SetEventNotification, WRAP_NAME(SetEventNotification));
+	DINPUT_SET_VTABLE(dinputDev->SetCooperativeLevel, WRAP_NAME(SetCooperativeLevel));
+	DINPUT_SET_VTABLE(dinputDev->GetObjectInfo, WRAP_NAME(GetObjectInfo));
+
+	DINPUT_SET_VTABLE(dinputDev->CreateEffect, WRAP_NAME(CreateEffect));
+	DINPUT_SET_VTABLE(dinputDev->SendForceFeedbackCommand, WRAP_NAME(SendForceFeedbackCommand));
+	DINPUT_SET_VTABLE(dinputDev->Poll, WRAP_NAME(Poll));
 
 	memcpy(&dinputDev->guid, rguid, sizeof(GUID));
 
@@ -933,13 +962,23 @@ MAYBE_STATIC REALIGN STDCALL uint32_t CreateDevice(void **this, const GUID *cons
 
 	if (dinputDev->guid.a == MOUSE || dinputDev->guid.a == JOYSTICK)
 	{
+#if defined(HOST_64BIT)
+		void *buf = malloc32(sizeof(void *));
+		*(uint32_t *)directInputDevice = (uint32_t)(uintptr_t)buf;
+		*(void **)(uintptr_t)(uint32_t)(uintptr_t)buf = (void *)(uintptr_t)(uint32_t)(uintptr_t)dinputDev;
+#else
 		*directInputDevice = malloc(sizeof(void *));
 		**directInputDevice = dinputDev;
+#endif
 		return 0;
 	}
 
 //	fprintf(stderr, "CreateDevice: error 0x%.8X\n", dinputDev->guid.a);
+#if defined(HOST_64BIT)
+	free32((void *)dinputDev - sizeof(DirectInputObject));
+#else
 	free((void *)dinputDev - sizeof(DirectInputObject));
+#endif
 	return -1;
 }
 MAYBE_STATIC REALIGN STDCALL uint32_t EnumDevices(void **this, uint32_t devType, DIENUMDEVICESCALLBACKA callback, void *ref, uint32_t dwFlags)
@@ -950,6 +989,18 @@ MAYBE_STATIC REALIGN STDCALL uint32_t EnumDevices(void **this, uint32_t devType,
 	uint32_t i;
 	for (i = 0; i < 2; ++i)
 	{
+#if defined(HOST_64BIT)
+		DIDEVICEINSTANCEA *deviceInstance = (DIDEVICEINSTANCEA *)malloc32(sizeof(DIDEVICEINSTANCEA));
+		memset(deviceInstance, 0, sizeof(DIDEVICEINSTANCEA));
+		deviceInstance->guidInstance.a = JOYSTICK;
+		deviceInstance->guidInstance.b = i;
+		if (!wrap_stdcall2_ret(dinput_game_thread, callback, deviceInstance, ref))
+		{
+			free32(deviceInstance);
+			break;
+		}
+		free32(deviceInstance);
+#else
 		DIDEVICEINSTANCEA deviceInstance = {0};
 		deviceInstance.guidInstance.a = JOYSTICK;
 		deviceInstance.guidInstance.b = i;
@@ -961,6 +1012,7 @@ MAYBE_STATIC REALIGN STDCALL uint32_t EnumDevices(void **this, uint32_t devType,
 		{
 			break;
 		}
+#endif
 	}
 	return 0;
 }
@@ -969,16 +1021,32 @@ MAYBE_STATIC REALIGN STDCALL uint32_t EnumDevices(void **this, uint32_t devType,
 
 REALIGN STDCALL uint32_t DirectInputCreateA_wrap(MAYBE_THIS void *hInstance, uint32_t version, DirectInput ***directInputA, void *unkOuter)
 {
+#if defined(HOST_64BIT)
+	DirectInput *dinput = (DirectInput *)malloc32(sizeof(DirectInputObject) + sizeof(DirectInput));
+	memset(dinput, 0, sizeof(DirectInputObject) + sizeof(DirectInput));
+#else
 	DirectInput *dinput = (DirectInput *)calloc(1, sizeof(DirectInputObject) + sizeof(DirectInput));
+#endif
 	((DirectInputObject *)dinput)->ref = 1;
 	dinput = (void *)dinput + sizeof(DirectInputObject);
 
-	dinput->Release = WRAP_NAME(Release);
-	dinput->CreateDevice = WRAP_NAME(CreateDevice);
-	dinput->EnumDevices = WRAP_NAME(EnumDevices);
+	DINPUT_SET_VTABLE(dinput->Release, WRAP_NAME(Release));
+	DINPUT_SET_VTABLE(dinput->CreateDevice, WRAP_NAME(CreateDevice));
+	DINPUT_SET_VTABLE(dinput->EnumDevices, WRAP_NAME(EnumDevices));
 
+#if defined(HOST_64BIT)
+	/* Write only 4 bytes (not 8) so we don't overflow into _data.lpEventAttributes.
+	   dinput and the intermediate buffer both live in the low 4 GB so their
+	   lower 32 bits are the entire usable address from the game's perspective. */
+	{
+		void *buf = malloc32(sizeof(void *));
+		*(uint32_t *)directInputA = (uint32_t)(uintptr_t)buf;
+		*(void **)(uintptr_t)(uint32_t)(uintptr_t)buf = (void *)(uintptr_t)(uint32_t)(uintptr_t)dinput;
+	}
+#else
 	*directInputA = malloc(sizeof(void *));
 	**directInputA = dinput;
+#endif
 
 #ifdef NFS_CPP
 	dinput_game_thread = this;

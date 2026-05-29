@@ -53,9 +53,13 @@
 
 	typedef struct
 	{
-		void *reserved1, *reserved2, *reserved3;
-		SDL_mutex *mutex;
-		void *reserved4, *reserved5;
+		uint32_t reserved[3];
+		union
+		{
+			uint32_t storage[2];
+			SDL_mutex *mutex;
+		} m;
+		uint32_t reserved4;
 	} CRITICAL_SECTION;
 
 	typedef struct

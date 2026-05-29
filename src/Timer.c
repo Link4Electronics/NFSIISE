@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "Wrapper.h"
+#include "Cpp/ByteUtils.h"
 
 #include <SDL2/SDL_timer.h>
 
@@ -10,14 +11,26 @@ typedef void Event;
 STDCALL BOOL SetEvent_wrap(Event *event);
 
 #ifdef NFS_CPP
-	extern Event **dword_4DDA70, **dword_5637CC, **dword_5637D8;
+	extern uint32_t *dword_4DDA70, *dword_5637CC, *dword_5637D8;
 	extern uint32_t *dword_4DB1B0, *dword_5637A0;
 
-	#define dword_4DDA70 (*dword_4DDA70)
-	#define dword_5637CC (*dword_5637CC)
-	#define dword_5637D8 (*dword_5637D8)
-	#define dword_4DB1B0 (*dword_4DB1B0)
-	#define dword_5637A0 (*dword_5637A0)
+	/* The extern variables in Entry.cpp store host addresses of DATA
+	 * fields (e.g. dword_4DDA70 = (void **)&_data.dword_4DDA70).
+	 *
+	 * To get the VALUE at the DATA field (not the pointer itself):
+	 *   read32le(dword_4DDA70) — read 4 LE bytes AT that host address.
+	 *
+	 * On x86_64: this is equivalent to *dword_4DDA70 (native LE read).
+	 * On PPC64 BE: read32le byteswaps the LE-stored bytes to host order.
+	 * On PPC64LE: same as x86_64.
+	 *
+	 * NB: read32le(&dword_4DDA70) would read the *pointer value itself*
+	 *     (low 32 bits of the host address) — WRONG on all platforms. */
+	#define dword_4DDA70 ((Event *)(uintptr_t)read32le(dword_4DDA70))
+	#define dword_5637CC ((Event *)(uintptr_t)read32le(dword_5637CC))
+	#define dword_5637D8 ((Event *)(uintptr_t)read32le(dword_5637D8))
+	#define dword_4DB1B0 read32le(dword_4DB1B0)
+	#define dword_5637A0 read32le(dword_5637A0)
 #else
 	extern Event *dword_4DDA70, *dword_5637CC, *dword_5637D8;
 	extern uint32_t dword_4DB1B0, dword_5637A0;
