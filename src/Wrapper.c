@@ -406,6 +406,17 @@ void free32(void *p) {
 	size_t size = *(size_t *)real_p;
 	munmap(real_p, size);
 }
+
+/* Allocate the x86 emulated stack from the low 4GB. */
+uint32_t wrapper_get_stack_top(void)
+{
+	static uint32_t top = 0;
+	if (top) return top;
+	void *p = malloc32(0x100000);
+	if (!p) return 0;
+	top = (uint32_t)(uintptr_t)p + 0x100000;
+	return top;
+}
 #endif  /* pool-based allocator */
 #endif  /* HOST_64BIT */
 
