@@ -9,7 +9,7 @@
 extern "C" {
 #endif
 
-#if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)
+#if defined(__powerpc64__) || defined(__PPC64__)
 
 void init_translation(uintptr_t bss_base, size_t bss_size,
                       uintptr_t data_base, size_t data_size);

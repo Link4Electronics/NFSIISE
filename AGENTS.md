@@ -87,12 +87,27 @@ struct (not an x86-VA-offset mirror).  `translate_host_to_x86` returns
 `DATA_X86_BASE + struct_offset`, which does not match any real x86 VA.
 C wrapper functions expect host addresses, not x86 VAs.
 
-## MemoryTranslate.cpp (ARM64 pool support added)
+## Translation layer is PPC64-only (ARM64 uses identity access)
 
-`MemoryTranslate.cpp` now has pool range tracking on ARM64 (matching PPC64).
-The identity fallthrough for pool/code addresses works on all `-no-pie` builds,
-but explicit pool range support is needed if MAP_FIXED ever fails (address
-already taken) and the pool is placed at a different host address.
+**ARM64 no longer uses the translation layer.** As of May 2026, ARM64 was removed
+from all `#if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__)`
+guards in `Application.h`, `MemoryTranslate.h`, `MemoryTranslate.cpp`, and
+`Entry.cpp`.  ARM64 now uses the `#else` branch — direct `*(type *)addr` access
+— matching the pre-PPC64 working state.
+
+**Rationale:** The translation layer (`za()`, `xlate_addr()`,
+`translate_x86_addr`, byte-swap read/write helpers, Int32Cache, etc.) was
+designed for PPC64 big-endian byte-swapping and non-identity pool addresses.
+ARM64 is little-endian with identity-mapped pool chunks (VIA MAP_FIXED), so
+x86 VAs are valid host addresses.  No translation or byte-swapping is needed.
+
+**MemoryTranslate.h** and **MemoryTranslate.cpp** now compile the full
+translation implementation only for PPC64.  ARM64 gets identity stubs from
+the header (`translate_x86_addr(x) = x`, `add_pool_range = no-op`, etc.).
+
+**Entry.cpp** calls `init_translation()` and `pool_preallocate()` only on PPC64
+(the latter is already done in `main()` for ARM64).  DATA/BSS workarounds
+(dword_5134D8 init, dword_4DB6A8 zeroing) still run on both PPC64 and ARM64.
 
 ## Fixed: ARM64 pool identity mapping (six issues)
 
@@ -164,20 +179,65 @@ sizes, and was moved before `in_pool` to avoid declaration ordering issues.
 
 ## Current ARM64 status (May 2026)
 
-**Build:** succeeds, binary runs, but pixel data is corrupted.
+**Build:** succeeds, binary initializes and renders frames without crashing.
 
-### Three crash bugs fixed (SIGSEGV prevented):
+### Translation layer removed from ARM64
+ARM64 was removed from all `#if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__)`
+guards across the codebase.  The `za()`, `xlate_addr()`, byte-swap read/write
+helpers, and Int32Cache are now PPC64-only.  ARM64 uses direct memory access
+(`*(int32_t *)addr`), which works because pool chunks are identity-mapped via
+MAP_FIXED and the binary's own DATA/BSS segments are at their natural addresses.
+Build output confirms clean compilation with no warnings in the affected files.
+
+### Pool range identity (confirmed working)
+The non-overlapping `addrs[]` (0x01B9E000, 0x40000000) provide 485 MB + 1 GB
+of identity-mapped pool space.  The 0x20000000 slot fails (EEXIST, brk conflict)
+and the 0x01B9E000 chunk covers addresses in [0x01B9E000,0x10000000) — including
+the game's embedded x86 VA 0x01B9E670.  `calloc_wrap` returns addresses in the
+0x40000000 range.  No SIGSEGV.
+
+### Four crash bugs fixed (SIGSEGV prevented):
 - **Crash A** — `_sub_4248D0` null surface at `Methods_03.cpp:3244` (guard: skip pixel loop if `dword_4EB57C == 0`)
 - **Crash B** — `_sub_481590` null function pointer at `Methods_09.cpp:12716` (guard: skip `call(to32i(ebx+4))` when zero)
 - **Crash C** — `_sub_4AD0F4` out-of-bounds `edi` at `Methods_14.cpp:4611,4630` (guard: clamp `edi` to `[0,63]`)
+- **Crash D** — `read32(0x5371aff0)` SIGSEGV in `to32i` called from `_sub_4B5917` via audio callback chain. Fix: non-overlapping identity pool ranges (see below).
 
-### Remaining issue: pixel decompressor gets wrong data
+### Fixed: overlapping pool identity ranges cause SIGSEGV at 0x5371aff0
 
-`_sub_4AD0F4` receives a surface address from `dword_4EB57C`. On ARM64 this is `0x01a9ade0` (BSS range) instead of a pool address (`0x20XXXXXX`). The address is WITHIN the `_bss` struct (the BSS identity check passes), but the data there is the ARM64 binary's own BSS variables, not the game's texture data.
+**Root cause:** The `addrs[]` array in `pool_grow()` (`Wrapper.c:85`) had overlapping ranges. Each chunk was POOL_SIZE (258 MB) but consecutive addresses were only 0x10000000 (256 MB) apart. MAP_FIXED_NOREPLACE for addresses at 0x30000000, 0x50000000, 0x70000000, etc. all failed with EEXIST (overlap with the adjacent identity chunk). After the first `pool_preallocate()`, only 3 identity chunks were created:
+- `[0x20000000, 0x30300000)` (i=0)
+- `[0x40000000, 0x50200000)` (i=1)  
+- `[0x60000000, 0x70200000)` (i=4)
 
-**Root cause hypothesis:** The surface pixel buffer at `dword_4EB57C` is freed by `_sub_424890` but the BSS field is NOT zeroed. A subsequent allocation (from `calloc_wrap` / `malloc32`) reuses the freed pool memory. Meanwhile `dword_4EB57C` still contains the old pool address. Some code path overwrites `dword_4EB57C` with a BSS-range address before the next render.
+x86 VA **0x5371aff0** (~1.30 GB) was ABOVE the 0x40000000 chunk end (0x50200000 = ~1.25 GB). No identity chunk covered it. The FALLBACK non-identity range for 0x50000000 could cover it, but was unreliable due to MAX_POOL_RANGES overflow and data races on `s_pool/s_npool`.
 
-**Alternate hypothesis:** The second `_sub_484498()` call during `_sub_424970` (line 3316) returns 0 (allocation failure) on ARM64 because the heap's slot type lookup returns a wrong slot. The slot type is derived from `ebx = dword_4DABE8`; the `(ebx & 0xF00) >> 8` index might not match any registered heap slot.
+`translate_x86_addr(0x5371aff0)` fell through to identity return → host = 0x5371aff0. But this address was NOT mapped (no pool chunk covering it) → SIGSEGV.
+
+**Fix (`Wrapper.c:85-107`):** Restructured `addrs[]` with non-overlapping identity ranges:
+
+```c
+static const uintptr_t addrs[] = {
+    0x01B9E000,  /* low:  [0x01B9E000, 0x10000000)  ~229 MB (may fail) */
+    0x20000000,  /* mid:  [0x20000000, 0x40000000)   512 MB */
+    0x40000000,  /* high: [0x40000000, 0x80000000)     1 GB */
+};
+```
+
+Sizes are now computed as `addrs[i+1] - addrs[i]` for all but the last entry (1 GB = POOL_SIZE * 4). This guarantees ranges never overlap:
+- `[0x01B9E000, 0x40000000)` if low succeeds, else just `[0x20000000, 0x40000000)`
+- `[0x40000000, 0x80800000)` — covers 0x5371aff0
+
+**Fix (`MemoryTranslate.cpp:33-65`):** Added `pthread_mutex_t s_pool_mtx` to protect `s_pool[]`/`s_npool` access. `translate_x86_addr` now locks the mutex while iterating pool ranges. `add_pool_range` locks while writing. Bumped `MAX_POOL_RANGES` from 16 to 32.
+
+**Fix (`Wrapper.c`):** FALLBACK `addrs_check` now uses `in_pool()` range check instead of exact address match, preventing non-identity duplicate ranges for addresses already covered by identity chunks.
+
+### Fixed: pixel decompressor wrong data (dword_4EB57C BSS-range regression)
+
+The non-overlapping identity pool chunks fixed a SECOND crash vector: `dword_4EB57C` now contains a valid pool address (e.g. `0x4037afb8`) instead of a BSS-range address (`0x01a9ade0`). The surface pixel buffer now points to the game's actual texture data in the pool, not to the ARM64 binary's own BSS variables.
+
+### Remaining issue: game spins on LeaveCriticalSection_wrap
+
+After the crash fixes, the game reaches the render loop (`__4248D0: entry` fires with pool addresses) but appears to spin on `LeaveCriticalSection_wrap(0x40d01478)` in a tight loop. This may indicate a missing audio/display sync or a different blocking path. The game runs without crashing but also without progressing past the spin.
 
 ### Key debug prints still active (essential for diagnosis):
 - `Methods_03.cpp:3218` — `__4248D0: entry` shows `dword_4EB57C/4EB578/4EB56C` each render
@@ -197,7 +257,7 @@ All other debug prints have been removed for production cleanliness.
 
 ## Key files
 - `src/Timer.c` — PPC64 BE timer thread fix
-- `src/Cpp/MemoryTranslate.cpp` — x86↔host address translation (ARM64: pool ranges added)
+- `src/Cpp/MemoryTranslate.cpp` — x86↔host address translation (PPC64 only; ARM64 uses identity stubs)
 - `src/Cpp/MemoryTranslate.h` — declarations
 - `src/Cpp/Application.h` — `push32` definition (line ~314; fix at line 317)
 - `src/Cpp/Methods_02.cpp` — crash site (~line 16800) and `push32` call (~line 16954)

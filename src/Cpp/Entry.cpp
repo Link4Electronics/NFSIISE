@@ -16,7 +16,7 @@ extern "C" void nfs2seEntrypoint()
 {
 	swap_initial_data();
 
-#if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)
+#if defined(__powerpc64__) || defined(__PPC64__)
 	/* Initialise the x86-to-host address translator with the
 	   BSS/DATA section bounds. */
 	init_translation(
@@ -24,7 +24,9 @@ extern "C" void nfs2seEntrypoint()
 		(uintptr_t)&_data, sizeof(_data));
 
 	pool_preallocate(); /* second call is a no-op if main() already did it */
+#endif
 
+#if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)
 	/* Initialize BSS pointer fields that were never written by game code
 	   (the original x86 binary had these in initialized data, not BSS).
 	   dword_5134D8 is a wchar string pointer used in _sub_4242F0 (wcscpy).

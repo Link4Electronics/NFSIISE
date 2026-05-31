@@ -44,8 +44,9 @@
 
 #include <pthread.h>
 
-/* Declared in MemoryTranslate.cpp. */
-extern void add_pool_range(uint32_t x86_base, uintptr_t host_base, size_t size);
+/* add_pool_range: on PPC64 it's defined in MemoryTranslate.cpp;
+   on ARM64 / fallback it's a static inline no‑op from MemoryTranslate.h. */
+#include "Cpp/MemoryTranslate.h"
 
 static void *pool_freelist = NULL;  /* linked through the first pointer-sized
                                        slot of each freed block */
@@ -82,25 +83,29 @@ static int add_pool_chunk(void *base)
 
 static int pool_grow(void)
 {
+	/* Non-overlapping identity pool ranges.  Each range must end
+	   before (or at) the next range's start, otherwise MAP_FIXED_
+	   NOREPLACE fails with EEXIST.  Together the ranges cover the
+	   full game heap VA space up to 0x80000000 (2 GB). */
 	static const uintptr_t addrs[] = {
-		0x20000000, 0x40000000,
-		0x30000000, 0x50000000, 0x60000000, 0x70000000,
-		0x01B9E000, 0x02000000, 0x03000000,
-		0x18000000, 0x28000000, 0x38000000,
+		0x01B9E000,  /* low:  [0x01B9E000, 0x10000000)  ~229 MB */
+		0x20000000,  /* mid:  [0x20000000, 0x40000000)   512 MB */
+		0x40000000,  /* high: [0x40000000, 0x80000000)     1 GB */
 	};
 	for (int i = 0; i < (int)(sizeof addrs / sizeof addrs[0]); i++) {
 		int skip = 0;
 		for (int j = 0; j < pool_nchunks; j++)
 			if ((uintptr_t)pool_chunks[j] == addrs[i]) { skip = 1; break; }
 		if (skip) continue;
-		/* Size that fits without overlapping the code segment. */
+		/* Size to the next addrs entry (or a large default for the
+		   last entry) so ranges never overlap. */
 		size_t sz;
-		if (addrs[i] < POOL_LOW_MAX)
+		if (i < (int)(sizeof addrs / sizeof addrs[0]) - 1)
+			sz = (size_t)(addrs[i+1] - addrs[i]);
+		else if (addrs[i] < POOL_LOW_MAX)
 			sz = POOL_LOW_MAX - addrs[i];
-		else if (i == 0)
-			sz = POOL_SIZE + 0x10000;
 		else
-			sz = POOL_SIZE;
+			sz = POOL_SIZE * 4;  /* last chunk: ~1 GB */
 		void *p;
 
 #if defined(MAP_FIXED_NOREPLACE)
@@ -108,23 +113,30 @@ static int pool_grow(void)
 			       PROT_READ | PROT_WRITE,
 			       MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE,
 			       -1, 0);
-		if (p != MAP_FAILED)
+		if (p != MAP_FAILED) {
+			fprintf(stderr, "pool_grow: MAP_FIXED_NOREPLACE 0x%lx sz=%zu -> %p\n",
+				(unsigned long)addrs[i], sz, p);
 			goto mapped_ok;
-		if (errno == EEXIST)
+		}
+		if (errno == EEXIST) {
+			fprintf(stderr, "pool_grow: EEXIST at 0x%lx\n", (unsigned long)addrs[i]);
 			continue; /* existing mapping — would corrupt skip */
+		}
 		/* EINVAL → flag not supported; fall through to plain MAP_FIXED */
 #endif
 		p = mmap((void *)addrs[i], sz,
 			       PROT_READ | PROT_WRITE,
 			       MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
 			       -1, 0);
-		if (p != MAP_FAILED)
+		if (p != MAP_FAILED) {
+			fprintf(stderr, "pool_grow: MAP_FIXED 0x%lx sz=%zu -> %p\n",
+				(unsigned long)addrs[i], sz, p);
 			goto mapped_ok;
+		}
 
-		/* Address-specific MAP_FIXED failed — skip, do NOT fall back
-		   to non-identity-mapped allocation because C wrapper functions
-		   dereference x86 VAs directly as host pointers, assuming the
-		   pool is identity-mapped. */
+		fprintf(stderr, "pool_grow: MAP_FIXED FAILED 0x%lx errno=%d\n",
+			(unsigned long)addrs[i], errno);
+		/* pool_preallocate will register fallback translations. */
 		continue;
 
 mapped_ok:
@@ -156,9 +168,15 @@ void pool_preallocate(void)
 		    pool_nchunks == 1) {
 			pool_cur  = pool_chunks[i];
 			pool_left = pool_chunk_sz[i];
+			fprintf(stderr, "pool_prealloc: bump chunk %p size %zu\n",
+				pool_cur, pool_left);
 			break;
 		}
 	}
+	/* Log all pool chunks for debugging */
+	for (int i = 0; i < pool_nchunks; i++)
+		fprintf(stderr, "pool_prealloc: chunk[%d] base=%p size=%zu\n",
+			i, pool_chunks[i], pool_chunk_sz[i]);
 	/* Targeted fallback for embedded x86 VAs not covered by pool_grow.
 	   When pool_grow succeeds for 0x02000000 but failed for 0x01B9E000,
 	   the gap [0x01B9E000,0x02000000) needs separate mapping. */
@@ -182,6 +200,82 @@ void pool_preallocate(void)
 			add_pool_range(low_addrs[i], (uintptr_t)p, sz);
 		}
 	}
+#if defined(__powerpc64__) || defined(__PPC64__)
+	/* Fallback for addresses in addrs[] (PPC64 only — ARM64 has identity
+	   mapping for all chunks and no translation layer). */
+	{
+		fprintf(stderr, "pool_prealloc: FALLBACK starting "
+			"nchunks=%d\n", pool_nchunks);
+		static const uintptr_t addrs_check[] = {
+			0x20000000, 0x40000000,
+			0x30000000, 0x50000000, 0x60000000, 0x70000000,
+			0x01B9E000, 0x02000000, 0x03000000,
+			0x18000000, 0x28000000, 0x38000000,
+		};
+		for (int i = 0;
+		     i < (int)(sizeof addrs_check / sizeof addrs_check[0]); i++) {
+			/* Check if ANY existing pool chunk's RANGE covers
+			   this address (use in_pool for range check). */
+			if (in_pool((const void *)(uintptr_t)addrs_check[i])) {
+				fprintf(stderr, "pool_prealloc: FALLBACK "
+					"skip 0x%lx (covered by chunk)\n",
+					(unsigned long)addrs_check[i]);
+				continue;
+			}
+			/* Also skip exact matches already in pool_chunks. */
+			{
+				int found = 0;
+				for (int j = 0; j < pool_nchunks; j++)
+					if ((uintptr_t)pool_chunks[j] == addrs_check[i])
+						{ found = 1; break; }
+				if (found) {
+					fprintf(stderr, "pool_prealloc: FALLBACK "
+						"skip 0x%lx (allocated)\n",
+						(unsigned long)addrs_check[i]);
+					continue;
+				}
+			}
+			fprintf(stderr, "pool_prealloc: FALLBACK need "
+				"0x%lx\n", (unsigned long)addrs_check[i]);
+			size_t need;
+			if (addrs_check[i] < POOL_LOW_MAX)
+				need = POOL_LOW_MAX - addrs_check[i];
+			else
+				need = POOL_SIZE;
+			void *backing = NULL;
+			size_t actual = 0;
+			/* Try decreasing sizes until we get a valid mapping.
+			   The backing address may be above 4 GB — that's fine
+			   because the result is returned as a 64-bit uintptr_t
+			   from translate_x86_addr, and the game never directly
+			   stores these addresses in 32-bit registers. */
+			for (size_t try_sz = need; try_sz >= 4UL * 1024 * 1024;
+			     try_sz >>= 1) {
+				backing = mmap(NULL, try_sz,
+					       PROT_READ | PROT_WRITE,
+					       MAP_PRIVATE | MAP_ANONYMOUS,
+					       -1, 0);
+				if (backing == MAP_FAILED) continue;
+				actual = try_sz;
+				break;
+			}
+			if (backing == MAP_FAILED || backing == NULL ||
+			    actual == 0) {
+				fprintf(stderr, "pool_prealloc: FALLBACK "
+					"no space for 0x%lx\n",
+					(unsigned long)addrs_check[i]);
+				continue;
+			}
+			fprintf(stderr,
+				"pool_prealloc: FALLBACK OK x86=0x%lx "
+				"host=%p sz=%zu\n",
+				(unsigned long)addrs_check[i],
+				backing, actual);
+			add_pool_range((uint32_t)addrs_check[i],
+				       (uintptr_t)backing, actual);
+		}
+	}
+#endif
 	pthread_mutex_unlock(&pool_mtx);
 }
 

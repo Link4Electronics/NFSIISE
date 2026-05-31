@@ -1,11 +1,13 @@
 #pragma once
+#include <unistd.h>
+#include <stdio.h>
 #include "CPU.h"
 #include "MemoryTranslate.h"
 struct Application : public CPU
 {
 	/* AF and PF flags are ignored */
 
-#if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)
+#if defined(__powerpc64__) || defined(__PPC64__)
 
 	/* Zero-extend a possibly-negative int32 to uintptr_t so that
 	   addresses >= 0x80000000U are not sign-extended to kernel space.
@@ -13,7 +15,15 @@ struct Application : public CPU
 	template<typename T>
 	static FnInl(uintptr_t) za(const T a)
 	{
-		return translate_x86_addr((uint32_t)(intptr_t)a);
+		static volatile int za_count = 0;
+		int cnt = za_count++;
+		uintptr_t result = translate_x86_addr((uint32_t)(intptr_t)a);
+		if (cnt < 10) {
+			fprintf(stderr, "za(%p) -> 0x%lx [%d]\n",
+				(void*)(uintptr_t)a, (unsigned long)result, cnt);
+			fflush(stderr);
+		}
+		return result;
 	}
 
 	/* All x86 data is little-endian in memory (both BSS/DATA and pool
@@ -28,6 +38,12 @@ struct Application : public CPU
 	   To be absolutely certain GCC does not optimise the byte accesses,
 	   each load uses its own volatile cast so the compiler has no
 	   opportunity to merge them. */
+	static FnInl(uint32_t) read8(const void *p) {
+		return ((volatile const unsigned char *)p)[0];
+	}
+	static FnInl(void) write8(void *p, uint32_t v) {
+		((volatile unsigned char *)p)[0] = (unsigned char)v;
+	}
 	static FnInl(uint16_t) read16(const void *p) {
 		unsigned char b0 = ((volatile const unsigned char *)p)[0];
 		unsigned char b1 = ((volatile const unsigned char *)p)[1];
@@ -136,7 +152,7 @@ struct Application : public CPU
 	template<typename T>
 	static FnInl(double &) to64f(const T addr)
 	{
-#if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)
+#if defined(__powerpc64__) || defined(__PPC64__)
 		uintptr_t ua = xlate_addr(addr);
 		DoubleCache &c = t64c();
 		if (c.addr && c.addr != (const void *)ua)
@@ -154,7 +170,7 @@ struct Application : public CPU
 	template<typename T>
 	static FnInl(float &) to32f(const T addr)
 	{
-#if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)
+#if defined(__powerpc64__) || defined(__PPC64__)
 		uintptr_t ua = xlate_addr(addr);
 		FloatCache &c = t32c();
 		if (c.addr && c.addr != (const void *)ua)
@@ -172,7 +188,7 @@ struct Application : public CPU
 	template<typename T>
 	static FnInl(int64_t &) to64i(const T addr)
 	{
-#if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)
+#if defined(__powerpc64__) || defined(__PPC64__)
 		uintptr_t ua = xlate_addr(addr);
 		Int64Cache &c = t64ic();
 		if (c.addr && c.addr != (const void *)ua)
@@ -189,7 +205,7 @@ struct Application : public CPU
 	template<typename T>
 	static FnInl(int32_t &) to32i(const T addr)
 	{
-#if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)
+#if defined(__powerpc64__) || defined(__PPC64__)
 		uintptr_t ua = xlate_addr(addr);
 		Int32Cache &c = t32ic();
 		if (c.addr && c.addr != (const void *)ua)
@@ -206,7 +222,7 @@ struct Application : public CPU
 	template<typename T>
 	static FnInl(int16_t &) to16i(const T addr)
 	{
-#if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)
+#if defined(__powerpc64__) || defined(__PPC64__)
 		uintptr_t ua = xlate_addr(addr);
 		Int16Cache &c = t16ic();
 		if (c.addr && c.addr != (const void *)ua)
@@ -230,7 +246,7 @@ struct Application : public CPU
 	template<typename T>
 	static FnInl(int8_t &) to8i(const T addr)
 	{
-#if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)
+#if defined(__powerpc64__) || defined(__PPC64__)
 		return *(int8_t *)za(addr);
 #else
 		return *(int8_t *)addr;
@@ -614,13 +630,17 @@ struct Application : public CPU
 
 	FnInl(void) movsb()
 	{
+#if defined(__powerpc64__) || defined(__PPC64__)
+		write8((void *)za(edi), read8((const void *)za(esi)));
+#else
 		*(int8_t *)edi = *(int8_t *)esi;
+#endif
 		esi += 1;
 		edi += 1;
 	}
 	FnInl(void) movsw()
 	{
-#if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)
+#if defined(__powerpc64__) || defined(__PPC64__)
 		write16((void *)za(edi), read16((const void *)za(esi)));
 #else
 		*(int16_t *)edi = *(int16_t *)esi;
@@ -630,7 +650,7 @@ struct Application : public CPU
 	}
 	FnInl(void) movsd()
 	{
-#if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)
+#if defined(__powerpc64__) || defined(__PPC64__)
 		write32((void *)za(edi), read32((const void *)za(esi)));
 #else
 		*(int32_t *)edi = *(int32_t *)esi;
@@ -641,12 +661,16 @@ struct Application : public CPU
 
 	FnInl(void) stosb()
 	{
+#if defined(__powerpc64__) || defined(__PPC64__)
+		write8((void *)za(edi), (unsigned char)al);
+#else
 		*(int8_t *)edi = al;
+#endif
 		edi += 1;
 	}
 	FnInl(void) stosd()
 	{
-#if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)
+#if defined(__powerpc64__) || defined(__PPC64__)
 		write32((void *)za(edi), (uint32_t)eax);
 #else
 		*(int32_t *)edi = eax;
@@ -656,14 +680,24 @@ struct Application : public CPU
 
 	FnInl(void) scasb()
 	{
+#if defined(__powerpc64__) || defined(__PPC64__)
+		const int8_t val = al - (int8_t)read8((const void *)za(edi));
+#else
 		const int8_t val = al - *(int8_t *)edi;
+#endif
 		set_ZF_SF_flags(val);
 		edi += 1;
 	} //TODO: OF, CF, but not needed
 
 	FnInl(void) cmpsb()
 	{
+#if defined(__powerpc64__) || defined(__PPC64__)
+		const int8_t v_esi = (int8_t)read8((const void *)za(esi));
+		const int8_t v_edi = (int8_t)read8((const void *)za(edi));
+		cmp(v_esi, v_edi);
+#else
 		cmp(*(int8_t *)esi, *(int8_t *)edi);
+#endif
 		esi += 1;
 		edi += 1;
 	}
@@ -745,7 +779,7 @@ struct Application : public CPU
 	{
 		static_assert(!is_floating_point<GET_TYPE(val)>::value, "FISTP requires integer!");
 		val = fpu.st(0);
-#if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)
+#if defined(__powerpc64__) || defined(__PPC64__)
 		flush(val);
 #endif
 		fpu.pop();
@@ -754,7 +788,7 @@ struct Application : public CPU
 	FnInl(void) fstp(T &val)
 	{
 		fpu.store(val);
-#if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)
+#if defined(__powerpc64__) || defined(__PPC64__)
 		flush(val);
 #endif
 		fpu.pop();
@@ -768,7 +802,7 @@ struct Application : public CPU
 	FnInl(void) fst(T &val)
 	{
 		fpu.store(val);
-#if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)
+#if defined(__powerpc64__) || defined(__PPC64__)
 		flush(val);
 #endif
 	}
