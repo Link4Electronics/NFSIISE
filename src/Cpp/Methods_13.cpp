@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include "Game.h"
 #include "BSS.h"
 #include "DATA.h"
@@ -954,7 +955,7 @@ loc_49C9BA:
 	push32(0x10);
 	xor_(edx, edx);
 	add(ebx, ebp);
-	esp -= 4; _sub_48438C(); esp += 4; //call
+	esp -= 4; _sub_48438C(); esp += 4; //call (mb_ram, type=0)
 	push32(0);
 	push32(0);
 	push32(0x1000);
@@ -963,7 +964,7 @@ loc_49C9BA:
 	push32(0x1000);
 	xor_(ecx, ecx);
 	xor_(ebx, ebx);
-	esp -= 4; _sub_48438C(); esp += 4; //call
+	esp -= 4; _sub_48438C(); esp += 4; //call (mb_vmm, type=0x300)
 	ecx = to32i(dword_4DB1F4); //mov
 	edx = to32i(dword_4DB1F8); //mov
 	eax = to32i(dword_563F00); //mov

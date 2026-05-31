@@ -5,7 +5,7 @@ struct Application : public CPU
 {
 	/* AF and PF flags are ignored */
 
-#if defined(__powerpc64__) || defined(__PPC64__)
+#if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)
 
 	/* Zero-extend a possibly-negative int32 to uintptr_t so that
 	   addresses >= 0x80000000U are not sign-extended to kernel space.
@@ -136,7 +136,7 @@ struct Application : public CPU
 	template<typename T>
 	static FnInl(double &) to64f(const T addr)
 	{
-#if defined(__powerpc64__) || defined(__PPC64__)
+#if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)
 		uintptr_t ua = xlate_addr(addr);
 		DoubleCache &c = t64c();
 		if (c.addr && c.addr != (const void *)ua)
@@ -154,7 +154,7 @@ struct Application : public CPU
 	template<typename T>
 	static FnInl(float &) to32f(const T addr)
 	{
-#if defined(__powerpc64__) || defined(__PPC64__)
+#if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)
 		uintptr_t ua = xlate_addr(addr);
 		FloatCache &c = t32c();
 		if (c.addr && c.addr != (const void *)ua)
@@ -172,7 +172,7 @@ struct Application : public CPU
 	template<typename T>
 	static FnInl(int64_t &) to64i(const T addr)
 	{
-#if defined(__powerpc64__) || defined(__PPC64__)
+#if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)
 		uintptr_t ua = xlate_addr(addr);
 		Int64Cache &c = t64ic();
 		if (c.addr && c.addr != (const void *)ua)
@@ -189,7 +189,7 @@ struct Application : public CPU
 	template<typename T>
 	static FnInl(int32_t &) to32i(const T addr)
 	{
-#if defined(__powerpc64__) || defined(__PPC64__)
+#if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)
 		uintptr_t ua = xlate_addr(addr);
 		Int32Cache &c = t32ic();
 		if (c.addr && c.addr != (const void *)ua)
@@ -206,7 +206,7 @@ struct Application : public CPU
 	template<typename T>
 	static FnInl(int16_t &) to16i(const T addr)
 	{
-#if defined(__powerpc64__) || defined(__PPC64__)
+#if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)
 		uintptr_t ua = xlate_addr(addr);
 		Int16Cache &c = t16ic();
 		if (c.addr && c.addr != (const void *)ua)
@@ -230,7 +230,7 @@ struct Application : public CPU
 	template<typename T>
 	static FnInl(int8_t &) to8i(const T addr)
 	{
-#if defined(__powerpc64__) || defined(__PPC64__)
+#if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)
 		return *(int8_t *)za(addr);
 #else
 		return *(int8_t *)addr;
@@ -314,6 +314,12 @@ struct Application : public CPU
 	FnInl(void) push32(const T val)
 	{
 		esp -= 4;
+		/* Truncate host pointer to 32-bit x86 VA.  All addresses (code,
+		   DATA, BSS, pool) are in the low 4 GB on all platforms thanks
+		   to -no-pie and MAP_FIXED pool allocation, so simple truncation
+		   preserves the correct host address.  translate_host_to_x86 is
+		   NOT used here because the DataLayout struct is sequential —
+		   struct offsets don't match x86 VAs from field names. */
 		to32i(esp) = (int32_t)(intptr_t)val;
 	}
 	template<typename T>
@@ -614,7 +620,7 @@ struct Application : public CPU
 	}
 	FnInl(void) movsw()
 	{
-#if defined(__powerpc64__) || defined(__PPC64__)
+#if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)
 		write16((void *)za(edi), read16((const void *)za(esi)));
 #else
 		*(int16_t *)edi = *(int16_t *)esi;
@@ -624,7 +630,7 @@ struct Application : public CPU
 	}
 	FnInl(void) movsd()
 	{
-#if defined(__powerpc64__) || defined(__PPC64__)
+#if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)
 		write32((void *)za(edi), read32((const void *)za(esi)));
 #else
 		*(int32_t *)edi = *(int32_t *)esi;
@@ -640,7 +646,7 @@ struct Application : public CPU
 	}
 	FnInl(void) stosd()
 	{
-#if defined(__powerpc64__) || defined(__PPC64__)
+#if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)
 		write32((void *)za(edi), (uint32_t)eax);
 #else
 		*(int32_t *)edi = eax;
@@ -739,7 +745,7 @@ struct Application : public CPU
 	{
 		static_assert(!is_floating_point<GET_TYPE(val)>::value, "FISTP requires integer!");
 		val = fpu.st(0);
-#if defined(__powerpc64__) || defined(__PPC64__)
+#if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)
 		flush(val);
 #endif
 		fpu.pop();
@@ -748,7 +754,7 @@ struct Application : public CPU
 	FnInl(void) fstp(T &val)
 	{
 		fpu.store(val);
-#if defined(__powerpc64__) || defined(__PPC64__)
+#if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)
 		flush(val);
 #endif
 		fpu.pop();
@@ -762,7 +768,7 @@ struct Application : public CPU
 	FnInl(void) fst(T &val)
 	{
 		fpu.store(val);
-#if defined(__powerpc64__) || defined(__PPC64__)
+#if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)
 		flush(val);
 #endif
 	}

@@ -1,3 +1,4 @@
+#include <cstdio>
 #include "Game.h"
 #include "BSS.h"
 #include "DATA.h"

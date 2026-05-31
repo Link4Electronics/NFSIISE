@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include "Game.h"
 #include "BSS.h"
 #include "DATA.h"
@@ -12711,6 +12712,7 @@ Fn(void) Game::_sub_481590()
 	push32(edx);
 	ecx = to32i(ebp-4); //mov
 	push32(ecx);
+	if (to32i(ebx+4) == 0) { printf("null funcptr skip ebx=%x\n", ebx); fflush(stdout); edi = 0; goto loc_48163B; }
 	call(to32i(ebx+4));
 	edi = eax; //mov
 loc_48163B:

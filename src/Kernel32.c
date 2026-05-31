@@ -281,16 +281,28 @@ REALIGN STDCALL void InitializeCriticalSection_wrap(CRITICAL_SECTION *criticalSe
 	fprintf(stderr, "InitializeCriticalSection_wrap(%p)\n", (void *)criticalSection);
 	criticalSection->m.mutex = SDL_CreateMutex();
 }
+extern void debug_dump_cs_fields(void);
+
 REALIGN STDCALL void EnterCriticalSection_wrap(CRITICAL_SECTION *criticalSection)
 {
+	if ((uintptr_t)criticalSection < 0x10000) {
+		fprintf(stderr, "EnterCriticalSection_wrap(%p) SKIP\n",
+			(void *)criticalSection);
+		debug_dump_cs_fields();
+		return;
+	}
 	SDL_LockMutex(criticalSection->m.mutex);
 }
 REALIGN STDCALL void LeaveCriticalSection_wrap(CRITICAL_SECTION *criticalSection)
 {
+	fprintf(stderr, "LeaveCriticalSection_wrap(%p)\n", (void *)criticalSection);
+	if ((uintptr_t)criticalSection < 0x10000) { fprintf(stderr, "  -> too low, skipping\n"); return; }
 	SDL_UnlockMutex(criticalSection->m.mutex);
 }
 REALIGN STDCALL void DeleteCriticalSection_wrap(CRITICAL_SECTION *criticalSection)
 {
+	fprintf(stderr, "DeleteCriticalSection_wrap(%p)\n", (void *)criticalSection);
+	if ((uintptr_t)criticalSection < 0x10000) return;
 	if (criticalSection->m.mutex)
 	{
 		SDL_DestroyMutex(criticalSection->m.mutex);

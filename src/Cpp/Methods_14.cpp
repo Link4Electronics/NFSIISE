@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include "Game.h"
 #include "BSS.h"
 #include "DATA.h"
@@ -4588,6 +4589,7 @@ Fn(void) Game::_sub_4AD0F4()
 	push32(edi);
 	push32(ebp);
 	esi = eax; //mov
+
 	xor_(eax, eax);
 	ax = to16i(esi); //mov
 	xor_(ebx, ebx);
@@ -4606,7 +4608,7 @@ loc_4AD120:
 	if (jz())
 		goto loc_4AD164;
 	edx = eax; //mov
-	bl = (int32_t)(intptr_t)byte_4DEF20[edi]; //mov
+	bl = (int32_t)(intptr_t)byte_4DEF20[edi >= 0 ? edi : 0]; //mov
 	shr(edx, (int32_t)0xA);
 	if (jz())
 		goto loc_4AD14D;
@@ -4614,6 +4616,7 @@ loc_4AD13B:
 	dec(edi);
 	dec(edx);
 	to32i(dword_4E29EC+ebx*4) = ebp; //mov
+	if (edi < 0) { edi = 0; }
 	bl = (int32_t)(intptr_t)byte_4DEF20[edi]; //mov
 	if (jnz())
 		goto loc_4AD13B;
@@ -4625,12 +4628,13 @@ loc_4AD14D:
 	to32i(dword_4E29EC+ebx*4) = eax; //mov
 	goto loc_4AD120;
 loc_4AD164:
-	bl = (int32_t)(intptr_t)byte_4DEF20[edi]; //mov
+	bl = (int32_t)(intptr_t)byte_4DEF20[edi >= 0 ? edi : 0]; //mov
 loc_4AD16A:
 	dec(edi);
 	if (js())
 		goto loc_4AD17D;
 	to32i(dword_4E29EC+ebx*4) = ebp; //mov
+	if (edi < 0) { edi = 0; }
 	bl = (int32_t)(intptr_t)byte_4DEF20[edi]; //mov
 	goto loc_4AD16A;
 loc_4AD17D:

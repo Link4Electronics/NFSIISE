@@ -1,3 +1,4 @@
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include "Game.h"
@@ -7,6 +8,7 @@
 #include "MemoryTranslate.h"
 
 extern "C" void pool_preallocate(void);
+extern "C" uint32_t wrapper_get_stack_top(void);
 
 void *main_game_thread, *audio_game_thread;
 
@@ -14,19 +16,30 @@ extern "C" void nfs2seEntrypoint()
 {
 	swap_initial_data();
 
-#if defined(__powerpc64__) || defined(__PPC64__)
+#if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)
 	/* Initialise the x86-to-host address translator with the
 	   BSS/DATA section bounds. */
 	init_translation(
 		(uintptr_t)&_bss,  sizeof(_bss),
 		(uintptr_t)&_data, sizeof(_data));
 
-	/* Pre-allocate all pool chunks so that x86 virtual addresses
-	   are backed by memory. */
-	pool_preallocate();
+	pool_preallocate(); /* second call is a no-op if main() already did it */
+
+	/* Initialize BSS pointer fields that were never written by game code
+	   (the original x86 binary had these in initialized data, not BSS).
+	   dword_5134D8 is a wchar string pointer used in _sub_4242F0 (wcscpy).
+	   Without initialization, it stays NULL and causes SIGSEGV. */
+	{
+		uint16_t *empty = (uint16_t *)malloc32(4);
+		if (empty) {
+			empty[0] = 0; /* null wchar L"" */
+			/* Direct write: dword_5134D8 is a struct macro giving host ptr */
+			*(volatile uint32_t *)dword_5134D8 = (uint32_t)(intptr_t)empty;
+		}
+	}
 #endif
 
-#if defined(__powerpc64__) || defined(__PPC64__)
+#if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)
 	/* Zero DATA variables that store relative x86 addresses instead of
 	   absolute ones, forcing the runtime initialisation path. */
 	#undef dword_4DB6A8
@@ -41,6 +54,7 @@ extern "C" void nfs2seEntrypoint()
 	main_game_thread = game;
 	audio_game_thread = audio;
 
+	game->esp = wrapper_get_stack_top();
 	game->_start();
 }
 

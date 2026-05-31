@@ -57,6 +57,7 @@ static pthread_mutex_t pool_mtx = PTHREAD_MUTEX_INITIALIZER;
    reject stale pointers that leaked in from the original x86 game data. */
 #define MAX_POOL_CHUNKS 12
 static void  *pool_chunks[MAX_POOL_CHUNKS];
+static size_t pool_chunk_sz[MAX_POOL_CHUNKS];
 static int    pool_nchunks = 0;
 
 /* Return 1 when ptr falls inside one of our known pool chunks. */
@@ -64,7 +65,7 @@ static int in_pool(const void *ptr)
 {
 	for (int i = 0; i < pool_nchunks; i++)
 		if ((const char *)ptr >= (const char *)pool_chunks[i] &&
-		    (const char *)ptr <  (const char *)pool_chunks[i] + POOL_SIZE)
+		    (const char *)ptr <  (const char *)pool_chunks[i] + pool_chunk_sz[i])
 			return 1;
 	return 0;
 }
@@ -76,67 +77,63 @@ static int add_pool_chunk(void *base)
 	return 1;
 }
 
+/* Pool chunks below this must be sized to not overlap the code segment. */
+#define POOL_LOW_MAX 0x10000000U
+
 static int pool_grow(void)
 {
 	static const uintptr_t addrs[] = {
 		0x20000000, 0x40000000,
-		0x10000000, 0x30000000, 0x50000000, 0x60000000, 0x70000000,
-		0x08000000, 0x0C000000, 0x18000000, 0x28000000, 0x38000000,
+		0x30000000, 0x50000000, 0x60000000, 0x70000000,
+		0x01B9E000, 0x02000000, 0x03000000,
+		0x18000000, 0x28000000, 0x38000000,
 	};
 	for (int i = 0; i < (int)(sizeof addrs / sizeof addrs[0]); i++) {
 		int skip = 0;
 		for (int j = 0; j < pool_nchunks; j++)
 			if ((uintptr_t)pool_chunks[j] == addrs[i]) { skip = 1; break; }
 		if (skip) continue;
-		size_t sz = (i == 0) ? POOL_SIZE + 0x10000 : POOL_SIZE;
-		int flags = MAP_PRIVATE | MAP_ANONYMOUS;
+		/* Size that fits without overlapping the code segment. */
+		size_t sz;
+		if (addrs[i] < POOL_LOW_MAX)
+			sz = POOL_LOW_MAX - addrs[i];
+		else if (i == 0)
+			sz = POOL_SIZE + 0x10000;
+		else
+			sz = POOL_SIZE;
 		void *p;
-		int mapped = 0;
 
 #if defined(MAP_FIXED_NOREPLACE)
-		flags |= MAP_FIXED_NOREPLACE;
 		p = mmap((void *)addrs[i], sz,
 			       PROT_READ | PROT_WRITE,
-			       flags, -1, 0);
-		if (p != MAP_FAILED) {
-			mapped = 1;
-		} else {
-			int e = errno;
-			if (e == EINVAL)
-				/* flag not supported → try MAP_FIXED below */;
-			else
-				goto try_any;   /* EEXIST or other → skip MAP_FIXED */
-		}
+			       MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE,
+			       -1, 0);
+		if (p != MAP_FAILED)
+			goto mapped_ok;
+		if (errno == EEXIST)
+			continue; /* existing mapping — would corrupt skip */
+		/* EINVAL → flag not supported; fall through to plain MAP_FIXED */
 #endif
-		if (!mapped) {
-			p = mmap((void *)addrs[i], sz,
-				       PROT_READ | PROT_WRITE,
-				       MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
-				       -1, 0);
-			if (p != MAP_FAILED)
-				mapped = 1;
-		}
+		p = mmap((void *)addrs[i], sz,
+			       PROT_READ | PROT_WRITE,
+			       MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
+			       -1, 0);
+		if (p != MAP_FAILED)
+			goto mapped_ok;
 
-try_any:
-		if (!mapped) {
-			/* Address-specific mmap failed.  Allocate at any address
-			   the kernel provides and register the x86→host mapping
-			   so translate_x86_addr can find it. */
-			p = mmap(NULL, sz,
-				       PROT_READ | PROT_WRITE,
-				       MAP_PRIVATE | MAP_ANONYMOUS,
-				       -1, 0);
-			if (p != MAP_FAILED)
-				mapped = 1;
-		}
+		/* Address-specific MAP_FIXED failed — skip, do NOT fall back
+		   to non-identity-mapped allocation because C wrapper functions
+		   dereference x86 VAs directly as host pointers, assuming the
+		   pool is identity-mapped. */
+		continue;
 
-		if (mapped) {
-			pool_cur  = p;
-			pool_left = sz;
-			add_pool_chunk(p);
-			add_pool_range((uint32_t)addrs[i], (uintptr_t)p, sz);
-			return 1;
-		}
+mapped_ok:
+		pool_cur  = p;
+		pool_left = sz;
+		pool_chunk_sz[pool_nchunks] = sz;
+		add_pool_chunk(p);
+		add_pool_range((uint32_t)addrs[i], (uintptr_t)p, sz);
+		return 1;
 	}
 
 	return 0;
@@ -150,6 +147,40 @@ void pool_preallocate(void)
 	pthread_mutex_lock(&pool_mtx);
 	while (pool_grow()) {
 		/* keep going until pool_grow returns 0 (no more slots) */
+	}
+	/* Use the first (largest) chunk for bump allocation so that
+	   subsequent malloc32 calls don't exhaust a small low-range
+	   chunk first. */
+	for (int i = 0; i < pool_nchunks; i++) {
+		if ((uintptr_t)pool_chunks[i] >= POOL_LOW_MAX ||
+		    pool_nchunks == 1) {
+			pool_cur  = pool_chunks[i];
+			pool_left = pool_chunk_sz[i];
+			break;
+		}
+	}
+	/* Targeted fallback for embedded x86 VAs not covered by pool_grow.
+	   When pool_grow succeeds for 0x02000000 but failed for 0x01B9E000,
+	   the gap [0x01B9E000,0x02000000) needs separate mapping. */
+	{
+		static const uint32_t low_addrs[] = { 0x01B9E000 };
+		for (int i = 0; i < (int)(sizeof low_addrs / sizeof low_addrs[0]); i++) {
+			uint32_t upper = POOL_LOW_MAX;
+			for (int j = 0; j < pool_nchunks; j++) {
+				uintptr_t ca = (uintptr_t)pool_chunks[j];
+				if (ca > low_addrs[i] && ca < upper)
+					upper = (uint32_t)ca;
+			}
+			size_t sz = upper - low_addrs[i];
+			if (sz == 0) continue;
+			void *p = mmap((void *)(uintptr_t)low_addrs[i], sz,
+				       PROT_READ | PROT_WRITE,
+				       MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE,
+				       -1, 0);
+			if (p == MAP_FAILED) continue;
+			add_pool_chunk(p);
+			add_pool_range(low_addrs[i], (uintptr_t)p, sz);
+		}
 	}
 	pthread_mutex_unlock(&pool_mtx);
 }
@@ -967,6 +998,14 @@ int main(int argc, char *argv[])
 {
 	void nfs2seEntrypoint();
 	struct stat st;
+
+#if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)
+	/* Pre-allocate pool chunks BEFORE any malloc/free calls that might
+	   trigger musl's mallocng mmap-based meta allocation in the low
+	   address range.  Must come first to avoid MAP_FIXED conflicts. */
+	pool_preallocate();
+#endif
+
 	char *slash = strrchr(argv[0], '/');
 	if (slash)
 	{
@@ -1145,8 +1184,10 @@ REALIGN void *calloc_wrap(size_t num, size_t size)
 	memset(p, 0, num * size);
 	return p;
 #elif defined(HOST_64BIT)
+	fprintf(stderr, "calloc_wrap(%zu, %zu) = ", num, size);
 	void *p = malloc32(num * size);
 	if (p) memset(p, 0, num * size);
+	fprintf(stderr, "%p\n", p);
 	return p;
 #else
 	return calloc(num, size);

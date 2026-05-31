@@ -1,3 +1,4 @@
+#include <stdio.h>
 #include "Game.h"
 #include "BSS.h"
 #include "DATA.h"
@@ -2406,6 +2407,7 @@ Fn(void) Game::_sub_484498()
 	push32(ecx);
 	ecx = 1; //mov
 	esp -= 4; _sub_4844D4(); esp += 4; //call
+	do { printf("__484498: ecx=1 ret=%x\n", eax); fflush(stdout); } while(0);
 	test(eax, eax);
 	if (jnz())
 		goto loc_4844A9;
@@ -2413,6 +2415,7 @@ Fn(void) Game::_sub_484498()
 	return;
 loc_4844A9:
 	eax = to32i(eax); //mov
+	do { printf("__484498: deref=%x\n", eax); fflush(stdout); } while(0);
 	pop32(ecx);
 }
 Fn(void) Game::_sub_4844B0()
@@ -2450,6 +2453,7 @@ Fn(void) Game::_sub_4844D4()
 	push32(ebp);
 	esi = eax; //mov
 	edi = to32i(dword_563F00); //mov
+	do { printf("__4844D4: entry ecx=%x dword_563F00=%x esi=%x\n", ecx, to32i(dword_563F00), esi); fflush(stdout); } while(0);
 	test(edi, edi);
 	if (jz())
 		goto loc_4844EA;
