@@ -243,17 +243,24 @@ The non-overlapping identity pool chunks fixed a SECOND crash vector: `dword_4EB
 
 **Fix (`EAcsnd.c`):** The callback now uses `buffer` (pool-allocated via `malloc32`, in low 4GB) for all `getSamplesFunc` calls. The interpolated path uses the first 1024 bytes of `buffer` for raw input samples and offset 2048 for the interpolated output. Buffer allocation was increased from 2048 bytes to 4096 bytes (non-interpolated) / 8192 bytes (interpolated) to accommodate both input and output.
 
-### Remaining issue: game spins on LeaveCriticalSection_wrap
+### Fixed: release build SIGSEGV (use-after-free in `free32`)
 
-After the crash fixes, the game reaches the render loop (`__4248D0: entry` fires with pool addresses) but appears to spin on `LeaveCriticalSection_wrap(0x40d01478)` in a tight loop. This may indicate a missing audio/display sync or a different blocking path. The game runs without crashing but also without progressing past the spin.
+**Crash (x86-64):** `SIGSEGV at PC 0x411b9f fault 0x40339fd0` in `push32` (`Application.h:339`).
+Preceded by infinite `LeaveCriticalSection_wrap` spam (from `fprintf(stderr, ...)` in `Kernel32.c`).
 
-### Key debug prints still active (essential for diagnosis):
-- `Methods_03.cpp:3218` — `__4248D0: entry` shows `dword_4EB57C/4EB578/4EB56C` each render
-- `Methods_03.cpp:3309` — `__424970` shows surface creation results
-- `Methods_10.cpp:2454` — `__4844D4: entry` shows heap allocation: `ecx`, `dword_563F00`, `esi`
-- `Methods_09.cpp:12716` — null funcptr skip notification (rare trigger)
+**Root cause (double):**
+1. **Debug prints in `Kernel32.c`:** `LeaveCriticalSection_wrap`, `EnterCriticalSection_wrap`, `InitializeCriticalSection_wrap`, and `DeleteCriticalSection_wrap` all called `fprintf(stderr, ...)` on every invocation. When the game entered a tight critical-section loop, this produced endless stderr spam and massively slowed down thread synchronization.
+2. **`free32` on x86-64** called `munmap`, which unmapped pool-allocated memory. The game has a use-after-free bug — it accesses freed pool addresses later, causing SIGSEGV. The fault address varies (e.g. `0x40339fd0`, `0x411c1fd0`, `0x40b1dfd0`) but is always in the `[0x40000000, 0x80800000)` pool range.
+3. **`debug_dump_cs_fields`** in `Memory.cpp` called `fprintf(stderr, ...)` and was referenced from `EnterCriticalSection_wrap`.
 
-All other debug prints have been removed for production cleanliness.
+**Fixes:**
+1. **All `fprintf(stderr, ...)` removed** from `Kernel32.c` critical section wrappers (Leave, Enter, Init, Delete) — stops the spam.
+2. **All `printf(...)` removed** from `Methods_03.cpp` (`__4248D0`, `__424970`), `Methods_09.cpp` (null funcptr skip), `Methods_10.cpp` (`__484498`, `__4844D4`) — removes render-path debug output.
+3. **`debug_dump_cs_fields` removed** from `Memory.cpp` (no longer referenced after EnterCriticalSection cleanup).
+4. **`free32` on x86-64** changed from `munmap` to `madvise(ptr, size, MADV_DONTNEED)` — keeps the virtual address range mapped (prevents SIGSEGV on use-after-free) but tells the kernel to discard physical pages.
+5. **`pool_grow` debug `fprintf`** calls removed from `Wrapper.c` — silences pool setup output.
+
+**Result:** Game runs to at least 45 seconds without ANY stderr output and no crash. No `LeaveCriticalSection_wrap` spam.
 
 ## Testing flow
 

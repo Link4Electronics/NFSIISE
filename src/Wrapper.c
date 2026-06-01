@@ -15,6 +15,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
+#include <pthread.h>
 
 #if defined(HOST_64BIT)
 #if !defined(MAP_FIXED_NOREPLACE) && defined(MAP_FIXED)
@@ -41,8 +42,6 @@
  */
 #define POOL_SIZE  (258UL * 1024 * 1024)   /* 258 MB per pool chunk */
 #define POOL_ALIGN 16
-
-#include <pthread.h>
 
 /* add_pool_range: on PPC64 it's defined in MemoryTranslate.cpp;
    on ARM64 / fallback it's a static inline no‑op from MemoryTranslate.h. */
@@ -114,13 +113,10 @@ static int pool_grow(void)
 			       MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE,
 			       -1, 0);
 		if (p != MAP_FAILED) {
-			fprintf(stderr, "pool_grow: MAP_FIXED_NOREPLACE 0x%lx sz=%zu -> %p\n",
-				(unsigned long)addrs[i], sz, p);
 			goto mapped_ok;
 		}
 		if (errno == EEXIST) {
-			fprintf(stderr, "pool_grow: EEXIST at 0x%lx\n", (unsigned long)addrs[i]);
-			continue; /* existing mapping — would corrupt skip */
+			continue;
 		}
 		/* EINVAL → flag not supported; fall through to plain MAP_FIXED */
 #endif
@@ -129,14 +125,9 @@ static int pool_grow(void)
 			       MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
 			       -1, 0);
 		if (p != MAP_FAILED) {
-			fprintf(stderr, "pool_grow: MAP_FIXED 0x%lx sz=%zu -> %p\n",
-				(unsigned long)addrs[i], sz, p);
 			goto mapped_ok;
 		}
 
-		fprintf(stderr, "pool_grow: MAP_FIXED FAILED 0x%lx errno=%d\n",
-			(unsigned long)addrs[i], errno);
-		/* pool_preallocate will register fallback translations. */
 		continue;
 
 mapped_ok:
@@ -168,15 +159,10 @@ void pool_preallocate(void)
 		    pool_nchunks == 1) {
 			pool_cur  = pool_chunks[i];
 			pool_left = pool_chunk_sz[i];
-			fprintf(stderr, "pool_prealloc: bump chunk %p size %zu\n",
-				pool_cur, pool_left);
 			break;
 		}
 	}
-	/* Log all pool chunks for debugging */
-	for (int i = 0; i < pool_nchunks; i++)
-		fprintf(stderr, "pool_prealloc: chunk[%d] base=%p size=%zu\n",
-			i, pool_chunks[i], pool_chunk_sz[i]);
+	/* pool chunks are tracked in pool_chunks/pool_chunk_sz */
 	/* Targeted fallback for embedded x86 VAs not covered by pool_grow.
 	   When pool_grow succeeds for 0x02000000 but failed for 0x01B9E000,
 	   the gap [0x01B9E000,0x02000000) needs separate mapping. */
@@ -204,8 +190,6 @@ void pool_preallocate(void)
 	/* Fallback for addresses in addrs[] (PPC64 only — ARM64 has identity
 	   mapping for all chunks and no translation layer). */
 	{
-		fprintf(stderr, "pool_prealloc: FALLBACK starting "
-			"nchunks=%d\n", pool_nchunks);
 		static const uintptr_t addrs_check[] = {
 			0x20000000, 0x40000000,
 			0x30000000, 0x50000000, 0x60000000, 0x70000000,
@@ -217,9 +201,6 @@ void pool_preallocate(void)
 			/* Check if ANY existing pool chunk's RANGE covers
 			   this address (use in_pool for range check). */
 			if (in_pool((const void *)(uintptr_t)addrs_check[i])) {
-				fprintf(stderr, "pool_prealloc: FALLBACK "
-					"skip 0x%lx (covered by chunk)\n",
-					(unsigned long)addrs_check[i]);
 				continue;
 			}
 			/* Also skip exact matches already in pool_chunks. */
@@ -229,15 +210,10 @@ void pool_preallocate(void)
 					if ((uintptr_t)pool_chunks[j] == addrs_check[i])
 						{ found = 1; break; }
 				if (found) {
-					fprintf(stderr, "pool_prealloc: FALLBACK "
-						"skip 0x%lx (allocated)\n",
-						(unsigned long)addrs_check[i]);
 					continue;
 				}
 			}
-			fprintf(stderr, "pool_prealloc: FALLBACK need "
-				"0x%lx\n", (unsigned long)addrs_check[i]);
-			size_t need;
+				size_t need;
 			if (addrs_check[i] < POOL_LOW_MAX)
 				need = POOL_LOW_MAX - addrs_check[i];
 			else
@@ -261,16 +237,8 @@ void pool_preallocate(void)
 			}
 			if (backing == MAP_FAILED || backing == NULL ||
 			    actual == 0) {
-				fprintf(stderr, "pool_prealloc: FALLBACK "
-					"no space for 0x%lx\n",
-					(unsigned long)addrs_check[i]);
 				continue;
 			}
-			fprintf(stderr,
-				"pool_prealloc: FALLBACK OK x86=0x%lx "
-				"host=%p sz=%zu\n",
-				(unsigned long)addrs_check[i],
-				backing, actual);
 			add_pool_range((uint32_t)addrs_check[i],
 				       (uintptr_t)backing, actual);
 		}
@@ -356,8 +324,8 @@ uint32_t wrapper_get_stack_top(void)
 	return top;
 }
 
-#else  /* x86_64 (uses MAP_32BIT) */
-/* -----  Slot-based approach (x86_64)  ---------------------------------- */
+#else  /* x86_64 (uses MAP_32BIT / mmap_low) */
+/* -----  MAP_32BIT approach (x86_64)  ------------------------------------ */
 
 static void *mmap_low(size_t size)
 {
@@ -392,7 +360,8 @@ static void *mmap_low(size_t size)
 }
 
 void *malloc32(size_t size) {
-	/* Allocate in low 4GB, storing the size in a header so free32 can munmap. */
+	/* Allocate in low 4GB, storing the size in a header so free32 can
+	   madvise the correct range. */
 	size_t alloc_size = size + sizeof(size_t);
 	void *p = mmap_low(alloc_size);
 	if (p == MAP_FAILED) return NULL;
@@ -404,7 +373,9 @@ void free32(void *p) {
 	if (!p) return;
 	void *real_p = (void *)((uintptr_t)p - sizeof(size_t));
 	size_t size = *(size_t *)real_p;
-	munmap(real_p, size);
+	/* MADV_DONTNEED keeps the mapping (avoids SIGSEGV on use-after-free in
+	   game code) but tells the kernel to discard the physical pages. */
+	madvise(real_p, size, MADV_DONTNEED);
 }
 
 /* Allocate the x86 emulated stack from the low 4GB. */
@@ -417,6 +388,7 @@ uint32_t wrapper_get_stack_top(void)
 	top = (uint32_t)(uintptr_t)p + 0x100000;
 	return top;
 }
+
 #endif  /* pool-based allocator */
 #endif  /* HOST_64BIT */
 
@@ -1068,28 +1040,38 @@ REALIGN STDCALL SDL_Window *WrapperCreateWindow(WindowProc windowProc)
 	SDL_GetWindowSize(sdlWin, &winWidth, &winHeight);
 
 #ifndef __ANDROID__
-	icon = (uint32_t *)malloc(32 * 32 * 4);
+	uint8_t *icon_bytes = (uint8_t *)malloc(32 * 32 * 4);
 	for (i = 0, j = 0; i < sizeof compressed_icon; ++i)
 	{
-		uint32_t c;
+		uint32_t c, pix;
 		if (compressed_icon[i] & 0x80)
 			c = compressed_icon[i++] & 0x7F;
 		else
 			c = 1;
 		while (c--)
 		{
-			icon[j++] = palette[compressed_icon[i] >> 4];
-			icon[j++] = palette[compressed_icon[i] & 0x0F];
+			pix = palette[compressed_icon[i] >> 4];
+			icon_bytes[j++] = pix & 0xFF;         /* R */
+			icon_bytes[j++] = (pix >> 8) & 0xFF;  /* G */
+			icon_bytes[j++] = (pix >> 16) & 0xFF; /* B */
+			icon_bytes[j++] = (pix >> 24) & 0xFF; /* A */
+			pix = palette[compressed_icon[i] & 0x0F];
+			icon_bytes[j++] = pix & 0xFF;
+			icon_bytes[j++] = (pix >> 8) & 0xFF;
+			icon_bytes[j++] = (pix >> 16) & 0xFF;
+			icon_bytes[j++] = (pix >> 24) & 0xFF;
 		}
 	}
 	SDL_Surface *icon_surface = SDL_CreateSurface(32, 32, SDL_PIXELFORMAT_RGBA8888);
-	SDL_LockSurface(icon_surface);
-	memcpy(icon_surface->pixels, icon, 32 * 32 * 4);
-	SDL_UnlockSurface(icon_surface);
-	SDL_SetWindowIcon(sdlWin, icon_surface);
+	if (SDL_MUSTLOCK(icon_surface)) SDL_LockSurface(icon_surface);
+	memcpy(icon_surface->pixels, icon_bytes, 32 * 32 * 4);
+	if (SDL_MUSTLOCK(icon_surface)) SDL_UnlockSurface(icon_surface);
+	SDL_Surface *icon_converted = SDL_ConvertSurface(icon_surface, SDL_PIXELFORMAT_RGBA32);
 	SDL_DestroySurface(icon_surface);
+	SDL_SetWindowIcon(sdlWin, icon_converted);
+	SDL_DestroySurface(icon_converted);
 
-	free(icon);
+	free(icon_bytes);
 #endif
 
 	wndProc = windowProc;
@@ -1109,9 +1091,6 @@ int main(int argc, char *argv[])
 	struct stat st;
 
 #if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)
-	/* Pre-allocate pool chunks BEFORE any malloc/free calls that might
-	   trigger musl's mallocng mmap-based meta allocation in the low
-	   address range.  Must come first to avoid MAP_FIXED conflicts. */
 	pool_preallocate();
 #endif
 
@@ -1293,10 +1272,8 @@ REALIGN void *calloc_wrap(size_t num, size_t size)
 	memset(p, 0, num * size);
 	return p;
 #elif defined(HOST_64BIT)
-	fprintf(stderr, "calloc_wrap(%zu, %zu) = ", num, size);
 	void *p = malloc32(num * size);
 	if (p) memset(p, 0, num * size);
-	fprintf(stderr, "%p\n", p);
 	return p;
 #else
 	return calloc(num, size);

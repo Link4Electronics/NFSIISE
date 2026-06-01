@@ -3215,7 +3215,6 @@ Fn(void) Game::_sub_4248D0()
 	esp -= 4; _sub_4929D4(); esp += 4; //call
 	edx = to32i(dword_4EB578); //mov
 	xor_(ebp, ebp);
-	do { printf("__4248D0: entry dword_4EB57C=%x dword_4EB578=%x dword_4EB56C=%x\n", to32i(dword_4EB57C), to32i(dword_4EB578), to32i(dword_4EB56C)); fflush(stdout); } while(0);
 	test(edx, edx);
 	if (jle())
 		goto loc_42495D;
@@ -3239,7 +3238,7 @@ loc_424911:
 	edi = (int32_t)(intptr_t)(esi+esi); //lea
 	add(edx, eax);
 	eax = to32i(dword_4EB57C); //mov
-	do { if (eax == 0) { printf("__4248D0: NULL surface at loop, skipping\n"); fflush(stdout); goto loc_424950; } } while(0);
+	if (eax == 0) goto loc_424950;
 	add(eax, edi);
 	add(ecx, (int32_t)0x10);
 	esp -= 4; _sub_492A40(); esp += 4; //call
@@ -3316,7 +3315,6 @@ Fn(void) Game::_sub_424970()
 	edx = 0x40; //mov
 	ecx = to32i(dword_4DABE8); //mov
 	to32i(dword_4EB57C) = eax; //mov
-	do { printf("__424970: dword_4EB57C=%x dword_4EB574=%x width=%x height=%x\n", eax, to32i(dword_4EB574), to32i(dword_4EB578), to32i(dword_4EB56C)); fflush(stdout); } while(0);
 	eax = edx; //mov
 	esp -= 4; _sub_492820(); esp += 4; //call
 	push32(0);

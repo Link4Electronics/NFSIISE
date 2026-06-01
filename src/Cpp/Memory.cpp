@@ -1,24 +1,7 @@
-#include <cstdio>
 #include "Game.h"
 #include "BSS.h"
 #include "DATA.h"
 #include "Stubs.cpp"
-
-extern "C" void debug_dump_cs_fields(void)
-{
-	uint32_t v7708 = *(uint32_t*)dword_4D7708;
-	uint32_t v24E0 = *(uint32_t*)dword_4D24E0;
-	uint32_t v770C = *(uint32_t*)dword_4D770C;
-	uint32_t v24E4 = *(uint32_t*)dword_4D24E4;
-	uint32_t v6A0  = *(uint32_t*)dword_4DB6A0;
-	uint32_t v6A8  = *(uint32_t*)dword_4DB6A8;
-	fprintf(stderr, "CS fields: 4D7708=0x%x 4D24E0=0x%x 4D770C=0x%x 4D24E4=0x%x 4DB6A0=0x%x 4DB6A8=0x%x\n",
-		v7708, v24E0, v770C, v24E4, v6A0, v6A8);
-	fprintf(stderr, "dword_512160[0..7]:");
-	for (int i = 0; i < 8; i++)
-		fprintf(stderr, " [%d]=0x%x", i, *(uint32_t*)(dword_512160 + i*4));
-	fprintf(stderr, "\n");
-}
 
 #if !defined(__powerpc64__) && !defined(__PPC64__)
 BssLayout _bss alignas(4);
