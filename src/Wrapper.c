@@ -154,16 +154,15 @@ void pool_preallocate(void)
 	while (pool_grow()) {
 		/* keep going until pool_grow returns 0 (no more slots) */
 	}
-	/* Use the first (largest) chunk for bump allocation so that
-	   subsequent malloc32 calls don't exhaust a small low-range
-	   chunk first. */
-	for (int i = 0; i < pool_nchunks; i++) {
-		if ((uintptr_t)pool_chunks[i] >= POOL_LOW_MAX ||
-		    pool_nchunks == 1) {
-			pool_cur  = pool_chunks[i];
-			pool_left = pool_chunk_sz[i];
-			break;
-		}
+	/* Use the largest chunk for bump allocation so that subsequent
+	   malloc32 calls don't exhaust a small low-range chunk first. */
+	{
+		int best = 0;
+		for (int i = 1; i < pool_nchunks; i++)
+			if (pool_chunk_sz[i] > pool_chunk_sz[best])
+				best = i;
+		pool_cur  = pool_chunks[best];
+		pool_left = pool_chunk_sz[best];
 	}
 	/* pool chunks are tracked in pool_chunks/pool_chunk_sz */
 	/* Targeted fallback for embedded x86 VAs not covered by pool_grow.

@@ -374,3 +374,45 @@ All source files ported from SDL2 to SDL3.  Builds cleanly with zero warnings.
 - `src/DInput.c` — `DirectInputCreateA_wrap` (~line 1022)
 - `src/Wrapper.c` — `pool_grow` ARM64 fixes (non-identity fallback removed, low-addr chunk, EEXIST skip, early preallocation in main, `malloc32`/`free32` pool allocator)
 - `CMakeLists.txt` — build options (`-no-pie`, optional ASM mode)
+
+## PPC64 BE Status (June 2026)
+
+### Done
+- **Wrapper.c: low_start alignment** — hardcoded `0xFFF` → `sysconf(_SC_PAGE_SIZE)` for 64KB pages
+- **Wrapper.c: removed `MAP_FIXED` fallback** — `pool_grow()` only uses `MAP_FIXED_NOREPLACE`; skip on EEXIST/EINVAL
+- **Wrapper.c: low chunk fallback** — `0x01000000` → `0x18000000` (`_end = 0x11a51948` on PPC64)
+- **Wrapper.c: removed PPC64 non-identity fallback** — `addrs_check[]` mmap loop gone
+- **Wrapper.c: `vsprintf_wrap`** — all 7 `*ap++` x86 stack reads replaced with `read32le(ap++)` via `ByteUtils.h` (PPC64BE byte-swap fix)
+- **Wrapper.c: pool guard page** — last chunk size changed from `POOL_SIZE * 4` to `POOL_SIZE * 4 + page_size` for boundary-crossing safety
+- **Wrapper.c: pool chunk selection** — selects **largest** chunk for bump allocation (size-based scan) instead of first chunk ≥ `POOL_LOW_MAX`
+- **MemoryTranslate.cpp: PPC64 merged into ARM64 identity path** — `add_pool_range` no-op, `translate_x86_addr` only handles BSS/DATA x86 VAs
+- **BSS.h: removed `bss_pool()` redirect** — static `_bss` for all platforms
+- **Memory.cpp: removed `#if !defined(__powerpc64__)`** — `BssLayout _bss` always defined
+- **Entry.cpp: removed PPC64-only `pool_preallocate()`** — single call in `main()`
+- **SwapInit.h: fixed DATA/BSS double-swap mismatch** — `swap_initial_data()` returns immediately on PPC64
+- **Entry.cpp: fixed native write at line 37** — `*(uint32_t *)` → `Application::write32()` for LE byte order
+- **Application.h: cleaned `za()` debug spam** — removed `fprintf` on PPC64
+
+### Current crash (SIGSEGV at `___STOSD` → `read32(0x8080FFFD)`)
+The `___STOSD` unrolled loop writes 32 bytes per iteration via `to32i(eax) = edx`.
+The bump allocator consumed the largest chunk (`0x40000000`, ~1 GB + 64KB guard)
+and reached address `0x8080FFFD`. `read32(0x8080FFFD)` reads bytes
+`[0x8080FFFD, 0x80810000)` — byte 3 lands at `0x80810000`, one byte past the
+pool end. Same root cause as before: the guard page just moved the crash from
+`0x80800000` to `0x80810000`.
+
+### Root cause
+`malloc32` calls `pool_grow()` when the bump allocator runs out of space.
+`pool_grow` iterates `addrs[]` but skips addresses already tracked in
+`pool_chunks[]`. All pre-allocated chunks (including the largest at `0x40000000`)
+were added during `pool_preallocate()`, so when the bump allocator exhausts
+the current chunk, `pool_grow` returns 0 → `malloc32` returns NULL.
+
+**Partial fix:** Selecting the largest chunk gives ~1 GB of bump space, which
+might be enough for `_doStart`. If the game needs more, `pool_grow` must be
+changed to switch to a pre-allocated chunk instead of trying to mmap a new one.
+
+### Next steps
+1. Test the large-chunk selection fix on PPC64BE
+2. If SIGSEGV persists, modify `pool_grow` to switch bump allocator to a
+   pre-allocated chunk instead of skipping it
