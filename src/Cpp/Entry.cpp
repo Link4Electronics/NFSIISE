@@ -63,15 +63,22 @@ extern "C" void nfs2seEntrypoint()
 	/* Initialize BSS pointer fields that were never written by game code
 	   (the original x86 binary had these in initialized data, not BSS).
 	   dword_5134D8 is a wchar string pointer used in _sub_4242F0 (wcscpy).
-	   Without initialization, it stays NULL and causes SIGSEGV. */
+	   dword_5134B4 and dword_5134B8 are C string pointers used as file
+	   path prefixes (format "%s<filename>", so they should include a
+	   trailing separator like "fedata/pc/" or be empty for CWD lookups).
+	   Without initialization, they stay NULL and cause SIGSEGV when the
+	   format string "%s" is passed to sprintf (glibc outputs "(null)"). */
 	{
-		uint16_t *empty = (uint16_t *)malloc32(4);
-		if (empty) {
-			empty[0] = 0; /* null wchar L"" */
-			/* Use write32 for LE byte order (consistent with read32/write32 in
-			   Application.h).  Raw native write would store in host BE order,
-			   causing a double-swap mismatch when read32 reads it as LE. */
-			Application::write32((void *)&_bss.dword_5134D8, (uint32_t)(intptr_t)empty);
+		uint16_t *empty_w = (uint16_t *)malloc32(4);
+		if (empty_w) {
+			empty_w[0] = 0;
+			Application::write32((void *)&_bss.dword_5134D8, (uint32_t)(intptr_t)empty_w);
+		}
+		char *empty_c = (char *)malloc32(1);
+		if (empty_c) {
+			empty_c[0] = '\0';
+			Application::write32((void *)&_bss.dword_5134B4, (uint32_t)(intptr_t)empty_c);
+			Application::write32((void *)&_bss.dword_5134B8, (uint32_t)(intptr_t)empty_c);
 		}
 	}
 #endif

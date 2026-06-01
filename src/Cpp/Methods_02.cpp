@@ -8243,6 +8243,9 @@ loc_41B637:
 Fn(void) Game::_sub_41B650()
 {
 	push32(edx);
+#if defined(__powerpc64__) || defined(__PPC64__)
+	if (!to32i(dword_4D4AE0)) { pop32(edx); xor_(eax, eax); return; }
+#endif
 	edx = eax; //mov
 	shl(eax, (int32_t)2);
 	sub(eax, edx);
@@ -8254,6 +8257,9 @@ Fn(void) Game::_sub_41B650()
 Fn(void) Game::_sub_41B670()
 {
 	push32(edx);
+#if defined(__powerpc64__) || defined(__PPC64__)
+	if (!to32i(dword_4D4AE0)) { pop32(edx); xor_(eax, eax); return; }
+#endif
 	edx = eax; //mov
 	shl(eax, (int32_t)2);
 	sub(eax, edx);
