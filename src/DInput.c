@@ -764,20 +764,76 @@ MAYBE_STATIC REALIGN STDCALL uint32_t GetDeviceData(DirectInputDevice **this, ui
 {
 	/* Mouse only. This implementation forces the absolute position of the mouse cursor. */
 	DirectInputDevice *dev = DTHIS(DirectInputDevice, this);
-	if (!rgdod || !pdwInOut || dev->guid.a != MOUSE || *pdwInOut < 3)
+	if (!rgdod || !pdwInOut || dev->guid.a != MOUSE)
+		return 0;
+
+#if defined(__powerpc64__) || defined(__PPC64__)
+	uint32_t count = read32le(pdwInOut);
+	if (count < 3)
+		return 0;
+
+	/* PPC64: pool pointers may be unaligned (game internal heap sub-allocates
+	   at arbitrary offsets).  Use byte-at-a-time helpers to avoid alignment
+	   faults from native lwz/stw and memset dcbz. */
+	uint32_t sz = count * (uint32_t)sizeof(DIDEVICEOBJECTDATA);
+	for (uint32_t k = 0; k < sz; k++)
+		((volatile unsigned char *)rgdod)[k] = 0;
+
+	write32le(&rgdod[0].dwOfs, 0); //Mouse X
+	write32le(&rgdod[1].dwOfs, 4); //Mouse Y
+	write32le(&rgdod[2].dwOfs, 12); //Mouse Click
+	for (uint32_t i = 3; i < count; ++i)
+		write32le(&rgdod[i].dwOfs, 8); //Nothing
+
+	if (mousePositionX != dev->lastX || mousePositionY != dev->lastY)
+	{
+		SDL_WarpMouseInWindow(NULL, (mousePositionX / dpr * winWidth / 640.0f) + 0.5f, (mousePositionY / dpr * winHeight / 480.0f) + 0.5f);
+		dev->lastX = mousePositionX;
+		dev->lastY = mousePositionY;
+	}
+	else
+	{
+		if (touchId != 0)
+		{
+			dev->lastX += touchDX * dpr * 640.0f + 0.5f;
+			dev->lastY += touchDY * dpr * 480.0f + 0.5f;
+			touchDX = touchDY = 0.0f;
+			write32le(&rgdod[0].dwData, (uint32_t)(dev->lastX - mousePositionX));
+			write32le(&rgdod[1].dwData, (uint32_t)(dev->lastY - mousePositionY));
+		}
+		else
+		{
+			static int32_t lastMouseButton;
+			float x = 0.0f, y = 0.0f;
+			Uint32 mouseButton = SDL_GetRelativeMouseState(&x, &y) & SDL_BUTTON_LMASK;
+			if (x || y)
+			{
+				SDL_GetMouseState(&x, &y);
+				dev->lastX = (x * dpr * 640.0f / winWidth)  + 0.5f;
+				dev->lastY = (y * dpr * 480.0f / winHeight) + 0.5f;
+				write32le(&rgdod[0].dwData, (uint32_t)(dev->lastX - mousePositionX));
+				write32le(&rgdod[1].dwData, (uint32_t)(dev->lastY - mousePositionY));
+			}
+			if (!lastMouseButton)
+				write32le(&rgdod[2].dwData, (uint32_t)(-(int32_t)mouseButton));
+			lastMouseButton = mouseButton;
+		}
+	}
+#else
+	uint32_t count = *pdwInOut;
+	if (count < 3)
 		return 0;
 
 	uint32_t i;
-	memset(rgdod, 0, *pdwInOut * sizeof(DIDEVICEOBJECTDATA));
+	memset(rgdod, 0, count * sizeof(DIDEVICEOBJECTDATA));
 	rgdod[0].dwOfs = 0; //Mouse X
 	rgdod[1].dwOfs = 4; //Mouse Y
 	rgdod[2].dwOfs = 12; //Mouse Click
-	for (i = 3; i < *pdwInOut; ++i)
+	for (i = 3; i < count; ++i)
 		rgdod[i].dwOfs = 8; //Nothing
 
 	if (mousePositionX != dev->lastX || mousePositionY != dev->lastY)
 	{
-		/* Move the mouse cursor if game changes cursor position */
 		SDL_WarpMouseInWindow(NULL, (mousePositionX / dpr * winWidth / 640.0f) + 0.5f, (mousePositionY / dpr * winHeight / 480.0f) + 0.5f);
 		dev->lastX = mousePositionX;
 		dev->lastY = mousePositionY;
@@ -797,7 +853,7 @@ MAYBE_STATIC REALIGN STDCALL uint32_t GetDeviceData(DirectInputDevice **this, ui
 			static int32_t lastMouseButton;
 			float x = 0.0f, y = 0.0f;
 			Uint32 mouseButton = SDL_GetRelativeMouseState(&x, &y) & SDL_BUTTON_LMASK;
-			if (x || y) /* Only when mouse moved */
+			if (x || y)
 			{
 				SDL_GetMouseState(&x, &y);
 				dev->lastX = (x * dpr * 640.0f / winWidth)  + 0.5f;
@@ -810,6 +866,7 @@ MAYBE_STATIC REALIGN STDCALL uint32_t GetDeviceData(DirectInputDevice **this, ui
 			lastMouseButton = mouseButton;
 		}
 	}
+#endif
 
 	return 0;
 }

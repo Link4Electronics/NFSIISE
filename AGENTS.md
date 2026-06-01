@@ -537,3 +537,23 @@ address — **reverted**.  The null guard remains as the sole change.
 - A race condition where `SetEvent_wrap` or another thread corrupts the event handle on the x86 stack (unlikely since each thread has its own stack).
 
 **Fix (`Kernel32.c:376`):** Null guard — `if (!ev) continue;` — skips invalid event handles in the poll loop.  Prevents the SIGSEGV; the thread will `SDL_WaitCondition` until a valid event is signaled.
+
+### Fixed: PPC64 `memset` `dcbz` fault in `GetDeviceData` (unaligned pool pointers)
+
+**Crash:** `SIGSEGV at __GI_memset (dcbz)` from `GetDeviceData` at `DInput.c:771`.
+Parameters: `rgdod=0x402ffe32`, `pdwInOut=0x40300032`, `cbObjectData=16`.
+
+**Root cause:** `rgdod` and `pdwInOut` are pool pointers that are 2-byte aligned (ends in `0x32`), not 4-byte aligned.  They come from the game's internal heap which sub-allocates from `malloc32` blocks at arbitrary offsets.  On PPC64:
+
+- `memset` reaches the `dcbz` (data cache block zero) path which requires cache-block alignment (128 bytes).  The alignment calculations in glibc assume a properly aligned start and may produce an unaligned `dcbz` address → alignment interrupt → SIGSEGV.
+- Native `lwz`/`stw` instructions (for `*pdwInOut`, `rgdod->dwOfs`) also require 4-byte alignment → would fault on the first dereference.
+
+**This is a systemic issue:** any wrapper function that dereferences pointers returned by the game's internal heap can crash on PPC64.  The game's heap (`_sub_484498` / `_sub_4844D4`) allocates from `malloc32` chunks but sub-allocates at byte-granular offsets.
+
+**Fix (`DInput.c:763-815`):** PPC64-only `#if` path in `GetDeviceData`:
+1. Read `*pdwInOut` via `read32le(pdwInOut)` (byte-at-a-time, alignment-safe).
+2. Zero `rgdod` with a manual byte-store loop (`((volatile unsigned char *)rgdod)[k] = 0`).
+3. Write struct fields via `write32le(&rgdod[i].dwOfs, ...)` and `write32le(&rgdod[i].dwData, ...)`.
+4. The `#else` path (x86_64, ARM64) keeps the original native code.
+
+**Long-term fix needed:** Either (a) fix the game's internal heap to return 4-byte aligned pointers, or (b) add `read32le`/`write32le` wrappers in every function that receives pool pointers from the game.
