@@ -125,7 +125,11 @@ static int pool_grow(void)
 		if (i < (int)(sizeof addrs / sizeof addrs[0]) - 1)
 			sz = (size_t)(addrs[i+1] - addrs[i]);
 		else
-			sz = POOL_SIZE * 4 + page_size;  /* last chunk: ~1 GB + guard page */
+			/* last chunk: ~1 GB + 4-page guard (256 KB on PPC64).
+			   The guard absorbs STOSD/memset overruns past the bump
+			   end.  Observed overrun is ~64 KB + 1 byte; 4 pages
+			   provides generous margin. */
+			sz = POOL_SIZE * 4 + page_size * 4;
 		void *p;
 
 		p = mmap((void *)addrs[i], sz,
@@ -143,13 +147,11 @@ static int pool_grow(void)
 
 mapped_ok:
 		pool_cur  = p;
-		/* For the last chunk, reserve the guard page so the bump
-		   allocator never hands out addresses within page_size of
-		   the mapping end.  The guard bytes ARE mapped (they were
-		   included in the mmap) so any out-of-bounds read32/read64
-		   or unrolled STOSD write that overflows the bump space by
-		   less than page_size bytes will land in accessible memory
-		   instead of causing SIGSEGV. */
+		/* For the last chunk, reserve guard pages past the bump end.
+		   The guard bytes ARE mapped (included in the mmap) so any
+		   out-of-bounds read32/read64 or unrolled STOSD write that
+		   overflows the bump space by less than the guard size will
+		   land in accessible memory instead of causing SIGSEGV. */
 		pool_left = (i < (int)(sizeof addrs / sizeof addrs[0]) - 1)
 			    ? sz : (size_t)(POOL_SIZE * 4);
 		pool_chunk_sz[pool_nchunks] = sz; /* full size for in_pool */
@@ -258,9 +260,9 @@ void *malloc32(size_t size)
 	/* Bump-allocate from the current pool chunk.
 	   Reserve page_size bytes at the end of each chunk so the last buffer
 	   is never at the very edge.  If the game overruns the buffer (e.g.
-	   unrolled STOSD loop), the reserved space plus the mapped guard page
-	   together provide 2 * page_size bytes of accessible memory before
-	   hitting unmapped addresses. */
+	   unrolled STOSD loop), the reserved space plus the mapped guard pages
+	   together provide 5 * page_size bytes of accessible memory before
+	   hitting unmapped addresses (1 reserve + 4 guard). */
 	{
 		size_t reserve = (size_t)sysconf(_SC_PAGE_SIZE);
 		if (pool_left < need + reserve) {

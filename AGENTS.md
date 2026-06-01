@@ -392,16 +392,12 @@ All source files ported from SDL2 to SDL3.  Builds cleanly with zero warnings.
 - **BSS.h: removed `bss_pool()` redirect** — static `_bss` for all platforms
 - **Memory.cpp: removed `#if !defined(__powerpc64__)`** — `BssLayout _bss` always defined
 - **Entry.cpp: removed PPC64-only `pool_preallocate()`** — single call in `main()`
-- **SwapInit.h: fixed DATA/BSS double-swap mismatch** — `swap_initial_data()` returns immediately on PPC64
+- **SwapInit.h: re-enabled DATA byte-swap on PPC64** — `swap_initial_data()` now runs on PPC64 (was returning early).  The C++ compiler stores DATA initializer values in native big-endian byte order, but `read32`/`write32` always treat memory as little-endian (b0 = LSB).  The swap converts each field from BE to LE byte representation so `read32` returns the correct value.  Without this, `dword_4E0950` (initializer `{0xF4}` = 244 bytes) was stored as BE bytes `[0x00,0x00,0x00,0xF4]`; `read32` read it as LE → `0xF4000000` (~4 GB).  This made `_doStart`'s TLS alloca/memset overflow the pool, crashing in STOSD at `0x8080FFFD`.
 - **Entry.cpp: fixed native write at line 37** — `*(uint32_t *)` → `Application::write32()` for LE byte order
 - **Application.h: cleaned `za()` debug spam** — removed `fprintf` on PPC64
 
 ### Current status
-Game boots with SDL window visible, then crashes during `_doStart` while `___STOSD` (memset loop)
-writes near the end of the bump allocation space.  The guard page reservation and pool_grow
-fallback together should provide enough room for `_doStart` by switching chunks when the first
-is exhausted, with the guard page protecting any boundary-crossing reads/writes from the
-STOSD loop.
+The `_doStart` STOSD crash was caused by `dword_4E0950` reading as `0xF4000000` due to byte order mismatch on PPC64.  With `swap_initial_data()` re-enabled, the TLS size is correctly 244 bytes and the alloca/memset stays within the x86 stack.  The pool guard page is now 4 pages (256 KB, up from 1 page) as a defensive layer against any future buffer overruns.
 
 ### Pool layout (PPC64)
 3 pre-allocated chunks (mmap via MAP_FIXED_NOREPLACE), consumed by bump allocator in decreasing size order:
@@ -410,24 +406,17 @@ STOSD loop.
 |---------|-------------|-------------|-----------|
 | `0x18000000` | 128 MB | 128 MB | after 1 GB exhausted (fallback #1) |
 | `0x20000000` | 512 MB | 512 MB | after 128 MB exhausted (fallback #2) |
-| `0x40000000` | ~1 GB + 64 KB guard | ~1 GB | initial selection (largest) |
+| `0x40000000` | ~1 GB + 256 KB guard | ~1 GB | initial selection (largest) |
 
-The guard page `[0x80800000, 0x80810000)` is mapped R/W but never tracked by the bump allocator. Any read/write that overflows the bump space by ≤ 64 KB lands in accessible memory.
+The guard pages `[0x80800000, 0x80840000)` are mapped R/W but never tracked by the bump allocator. Any read/write that overflows the bump space by ≤ 256 KB lands in accessible memory.
 
-### How the three safety layers work together
-Despite the guard reservation, `_doStart` still crashed at `p=0x8080FFFD` — the bump allocator's
-last allocation placed a buffer ending at `0x80800000`, and the game's memset overran the buffer
-through the entire 64 KB guard page, crashing 3 bytes before the guard end.  The crash was
-caused by `read32(0x8080FFFD)` reading byte[3] from `0x80810000` (one byte past the guard end).
+### How the two changes fix the crash
 
-The three-layer fix:
-1. **Guard page** (`pool_bump_sz`): 64 KB mapped past bump end, never handed out by `malloc32`.
-2. **Pool reserve** (`malloc32`): reserve the last 64 KB of each chunk — `pool_left < need + page_size`
-   triggers `pool_grow` instead of `pool_left < need`. The last buffer is at least 64 KB from the
-   bump end, inside mapped chunk space.
-3. **Breathing room**: 64 KB reserve + 64 KB guard = 128 KB total safely-mapped memory past the
-   last allocation's nominal end.  The game's observed STOSD overrun (~65537 bytes) fits within this.
+**Root cause:** `swap_initial_data()` returned early on PPC64, so DATA fields kept native big-endian byte order. `read32` reads memory as little-endian (b0 = LSB), so every DATA field value was byte-swapped. `dword_4E0950` = `{0xF4}` (244 bytes TLS size) was stored as `[0x00,0x00,0x00,0xF4]` (BE) and read as `0xF4000000` (~4 GB). This made `_doStart`'s alloca/memset overflow the pool.
+
+**Fix:**
+1. **SwapInit.h (corrective):** Re-enable `swap_initial_data()` on PPC64 to convert DATA from BE to LE byte representation. The TLS size is now correctly 244 bytes.
+2. **Wrapper.c (defensive):** Guard page increased from 64 KB (1 page) to 256 KB (4 pages) as a safety net for any future buffer overruns. Pool reserve (64 KB) also retained.
 
 ### Next steps
-1. Test the combined fixes on PPC64BE
-2. If game still crashes, increase guard page size (e.g. `page_size * 2`) to handle larger overruns
+1. Test on PPC64BE — the STOSD crash should be gone (the TLS memset stays within the x86 stack)

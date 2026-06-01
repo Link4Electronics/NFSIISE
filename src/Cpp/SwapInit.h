@@ -1,12 +1,12 @@
 #if defined(HOST_BIG_ENDIAN)
 static void swap_initial_data() {
-#if defined(__powerpc64__) || defined(__PPC64__)
-	/* Application.h read32/write32 handle byte-swap at runtime.
-	 * All memory is kept in LE order — no init-time swap needed.
-	 * #undef directives still run (preprocessor), so macros are
-	 * correctly undefined for Entry.cpp's direct struct access. */
-	return;
-#endif
+	/* PPC64: The C++ compiler stores DATA initializer values in native
+	 * big-endian byte order, but Application.h read32/write32 always
+	 * treat memory as little-endian (reading b0 as LSB).  This swap
+	 * converts each field's in-memory bytes from BE (MSB-first) to LE
+	 * (LSB-first) so that read32 returns the correct value.
+	 * Without this, e.g. dword_4E0950 = 0xF4 becomes 0xF4000000,
+	 * causing alloca/memset sizes of ~4 GB and STOSD pool overflow. */
     uint32_t *p32;
     uint16_t *p16;
 #undef dword_4E5010
