@@ -191,10 +191,16 @@ extern "C" void wrap_stdcall4(Game &game, void (*func)(Game &), int32_t arg0, in
 
 /* DInput */
 
-/* Read x86 stack argument using Application::read32 (byte-at-a-time LE).
-   On PPC64 BE, *(uint32_t *) would byte-swap the LE-stored value. */
+/* Read x86 stack argument.  On PPC64 BE, *(uint32_t *) would byte-swap
+   the LE-stored value, so use Application::read32 (byte-at-a-time LE).
+   On LE hosts (x86_64, ARM64), *(uint32_t *) is correct and more efficient. */
+#if defined(__powerpc64__) || defined(__PPC64__)
 #define STACK32(offset) \
 	Application::read32((const void *)(uintptr_t)(uint32_t)(game.esp + (offset)))
+#else
+#define STACK32(offset) \
+	(*(uint32_t *)(uintptr_t)(uint32_t)(game.esp + (offset)))
+#endif
 
 #define WrapFunction1Arg(func_name) \
 	extern "C" int32_t func_name(uint32_t arg0); \
