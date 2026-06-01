@@ -117,7 +117,7 @@ static int pool_grow(void)
 		if (i < (int)(sizeof addrs / sizeof addrs[0]) - 1)
 			sz = (size_t)(addrs[i+1] - addrs[i]);
 		else
-			sz = POOL_SIZE * 4;  /* last chunk: ~1 GB */
+			sz = POOL_SIZE * 4 + page_size;  /* last chunk: ~1 GB + guard page */
 		void *p;
 
 		p = mmap((void *)addrs[i], sz,
