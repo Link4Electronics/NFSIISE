@@ -398,20 +398,24 @@ All source files ported from SDL2 to SDL3.  Builds cleanly with zero warnings.
 
 ### Current status (June 2026)
 
-Both the STOSD TLS overflow and the DirectInput null-pointer crash are fixed.
+STOSD TLS overflow and DirectInput null-pointer crash are fixed. The `CreateDevice` `memcpy` SIGSEGV at `rguid=0xFFFFFFFF88117810` is also fixed.
 
 **STOSD crash (solved):** `dword_4E0950` reading as `0xF4000000` → fix: re-enable `swap_initial_data()` on PPC64 (converts DATA from BE to LE byte representation).  TLS size correctly 244 bytes.
 
-**DirectInput crash (solved):** `to32i(edx+0xC)` with `edx=0` at `Methods_02.cpp:16803`.  The game reads `dword_4D4C44` via `to32i` (4 LE bytes), but `DirectInputCreateA_wrap` stored the pool address via `*(uint32_t *)` (native BE store on PPC64).  The byte-swapped value (e.g. `0x00003040` instead of `0x40300000`) pointed to unmapped memory → `edx=0` → `to32i(0xC)` SIGSEGV.
+**DirectInput null-pointer crash (solved):** `to32i(edx+0xC)` with `edx=0` at `Methods_02.cpp:16803`.  `DirectInputCreateA_wrap` stored pool address via `*(uint32_t *)` (native BE) but game reads via `to32i` (LE) → byte-swapped pointer → unmapped → `edx=0` → `to32i(0xC)` SIGSEGV.
 
-**Root cause is SYSTEMIC:** Any C code that writes a 32-bit value to DATA-field or pool memory via `*(uint32_t *)` (native BE store) and is later read by the game via `to32i`/`read32` (LE read) gets a byte-swapped value.  Conversely, any native `*(void **)` read from a buffer written with 4 LE bytes gets a wrong 64-bit pointer on BE.
+**Root cause (systemic byte-order):** Any C code writing 32-bit values to DATA/pool memory via `*(uint32_t *)` (native BE) read later by `to32i`/`read32` (LE) gets byte-swapped.  Conversely, native `*(void **)` read from buffers written with 4 LE bytes gets a wrong 64-bit pointer on BE.
 
-**Systemic fixes applied:**
-1. **SwapInit.h (PPC64):** `swap_initial_data()` re-enabled — converts DATA initializers from BE to LE byte representation so `read32` returns correct values.
-2. **DInput.h:** Changed `DINPUT_SET_VTABLE` from native `slot = value` to `write32le(&(slot), value)` — all DirectInput vtable entries are stored in LE byte order.
-3. **DInput.h:** Added `DTHIS_PTR(this_ptr)` and `DTHIS(type, this_ptr)` macros — on PPC64 they use `read32le` to read 4 LE bytes from intermediate buffers; on LE they expand to the original `*(void **)`.  All `*this`/`(*this)` dereferences in `DInput.c` replaced with these macros.
-4. **DInput.c (DirectInputCreateA_wrap, CreateDevice, CreateEffect):** Changed `*(uint32_t *)` stores to DATA fields to `write32le()` — prevents byte-swapped pointer values.
-5. **Wrapper.c (defensive):** Guard page increased from 64 KB to 256 KB (4 pages) as safety net for buffer overruns.
+**Byte-order fixes applied (previous session):**
+1. **SwapInit.h (PPC64):** `swap_initial_data()` re-enabled — converts DATA initializers from BE to LE.
+2. **DInput.h:** `DINPUT_SET_VTABLE` → `write32le(&(slot), value)` + `DTHIS_PTR`/`DTHIS` macros for LE pointer reads.
+3. **DInput.c:** `*(uint32_t *)` stores → `write32le()`.
+
+**CreateDevice `memcpy` SIGSEGV (CRASH LOG, June 2):** `CreateDevice(this=0x3869f940, rguid=0xFFFFFFFF88117810, ...)` → `rguid` is a sign-extended 32-bit address.  Pool address `0x88117810` (bit 31 set) was passed as `int32_t` → sign-extended to `0xFFFFFFFF88117810` → unmapped → `memcpy` SIGSEGV.
+
+**Root cause (sign-extension):** `WrapFunction*Arg` macros in `Entry.cpp` declare all function args as `int32_t`.  On PPC64, `int32_t` with bit 31 set is sign-extended to 64 bits in the register.  The actual function expects `void *` (64-bit pointer) and reads all 64 bits → garbage high bits for addresses ≥ 0x80000000.
+
+**Fix (this session):** `Entry.cpp` `WrapFunction{1-5}Arg` macros — changed `int32_t` to `uint32_t` for both the function declaration parameter types and the `*(int32_t *)` x86-stack reads.  `uint32_t` is zero-extended on PPC64, producing correct 64-bit pointers.  Works identically on x86_64/ARM64 (upper register bits are unspecified in both signed and unsigned cases, but pool addresses are all < 4 GB).
 
 ### Pool layout (PPC64)
 3 pre-allocated chunks (mmap via MAP_FIXED_NOREPLACE), consumed by bump allocator in decreasing size order:

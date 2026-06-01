@@ -100,38 +100,38 @@ extern "C" void wrap_stdcall4(Game &game, void (*func)(Game &), int32_t arg0, in
 /* DInput */
 
 #define WrapFunction1Arg(func_name) \
-	extern "C" int32_t func_name(int32_t arg0); \
+	extern "C" int32_t func_name(uint32_t arg0); \
 	extern "C" void func_name##_wrap(Game &game) \
 	{ \
-		game.eax = func_name(*(int32_t *)(game.esp + 4)); \
+		game.eax = func_name(*(uint32_t *)(game.esp + 4)); \
 		game.esp += 4; \
 	}
 #define WrapFunction2Arg(func_name) \
-	extern "C" int32_t func_name(int32_t arg0, int32_t arg1); \
+	extern "C" int32_t func_name(uint32_t arg0, uint32_t arg1); \
 	extern "C" void func_name##_wrap(Game &game) \
 	{ \
-		game.eax = func_name(*(int32_t *)(game.esp + 4), *(int32_t *)(game.esp + 8)); \
+		game.eax = func_name(*(uint32_t *)(game.esp + 4), *(uint32_t *)(game.esp + 8)); \
 		game.esp += 8; \
 	}
 #define WrapFunction3Arg(func_name) \
-	extern "C" int32_t func_name(int32_t arg0, int32_t arg1, int32_t arg2); \
+	extern "C" int32_t func_name(uint32_t arg0, uint32_t arg1, uint32_t arg2); \
 	extern "C" void func_name##_wrap(Game &game) \
 	{ \
-		game.eax = func_name(*(int32_t *)(game.esp + 4), *(int32_t *)(game.esp + 8), *(int32_t *)(game.esp + 12)); \
+		game.eax = func_name(*(uint32_t *)(game.esp + 4), *(uint32_t *)(game.esp + 8), *(uint32_t *)(game.esp + 12)); \
 		game.esp += 12; \
 	}
 #define WrapFunction4Arg(func_name) \
-	extern "C" int32_t func_name(int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3); \
+	extern "C" int32_t func_name(uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3); \
 	extern "C" void func_name##_wrap(Game &game) \
 	{ \
-		game.eax = func_name(*(int32_t *)(game.esp + 4), *(int32_t *)(game.esp + 8), *(int32_t *)(game.esp + 12), *(int32_t *)(game.esp + 16)); \
+		game.eax = func_name(*(uint32_t *)(game.esp + 4), *(uint32_t *)(game.esp + 8), *(uint32_t *)(game.esp + 12), *(uint32_t *)(game.esp + 16)); \
 		game.esp += 16; \
 	}
 #define WrapFunction5Arg(func_name) \
-	extern "C" int32_t func_name(int32_t arg0, int32_t arg1, int32_t arg2, int32_t arg3, int32_t arg4); \
+	extern "C" int32_t func_name(uint32_t arg0, uint32_t arg1, uint32_t arg2, uint32_t arg3, uint32_t arg4); \
 	extern "C" void func_name##_wrap(Game &game) \
 	{ \
-		game.eax = func_name(*(int32_t *)(game.esp + 4), *(int32_t *)(game.esp + 8), *(int32_t *)(game.esp + 12), *(int32_t *)(game.esp + 16), *(int32_t *)(game.esp + 20)); \
+		game.eax = func_name(*(uint32_t *)(game.esp + 4), *(uint32_t *)(game.esp + 8), *(uint32_t *)(game.esp + 12), *(uint32_t *)(game.esp + 16), *(uint32_t *)(game.esp + 20)); \
 		game.esp += 20; \
 	}
 
