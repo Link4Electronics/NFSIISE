@@ -26,6 +26,16 @@ extern "C" void nfs2seEntrypoint()
 		(uintptr_t)&_data, sizeof(_data));
 #endif
 
+#if defined(__powerpc64__) || defined(__PPC64__)
+	/* Set byte_512ECC = 1 to skip movie init (matches x86_64 behavior).
+	   On x86_64 the config parser (_sub_4642F0) reads install.win and sets
+	   byte_512ECC = 1, which causes _sub_4242F0 to skip movie loading.
+	   On PPC64, _sub_4642F0 is entirely skipped by a platform guard, so
+	   byte_512ECC stays 0 (BSS), causing the game to look for DCT movies,
+	   fail to find them (wrong base path), and exit with an error. */
+	Application::write8((void *)&_bss.byte_512ECC, 1);
+#endif
+
 #if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)
 	/* Initialize BSS pointer fields that were never written by game code
 	   (the original x86 binary had these in initialized data, not BSS).

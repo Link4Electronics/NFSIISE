@@ -512,11 +512,7 @@ harmless because `eax` already contains the correct value (entry address).  A
 previous attempt to fix this (`eax = 1`) broke x86_64 by overwriting the entry
 address — **reverted**.  The null guard remains as the sole change.
 
-### Next steps
-1. Test on PPC64BE — the `_sub_486F40` null guard should prevent the crash at `_sub_4643B0`.  The game may proceed further or exit via `_sub_480200` → `_ExitProcess0` if `dword_4DAB5C` logic diverges.
-2. The game may crash further along (rendering, audio, etc.) as subsequent bugs are unmasked.
-3. If the game reaches the main menu, begin testing gameplay for endian-breakage.
-4. If the game exits early, check whether `dword_4DAB5C` has the wrong value on PPC64 (it should be 0 but appears non-zero, and the reason is still unknown).
+
 
 ### Fixed: WaitForMultipleObjects_wrap `ev->is_set` crash (crash in thread 10 audio)
 
@@ -579,3 +575,26 @@ allocation entirely, leaving `dword_4DD774 == 0`.  `_sub_4A63B0` then sees
 `edx == 0` and returns without calling `_sub_49E448`.  The 4 KB scratch block
 is only used for heap internal bookkeeping (tracking free chunks) and is not
 required for correct game operation.
+
+### Fixed: "MOVIE FILE NOT FOUND" on PPC64 (skipped config parser)
+
+**Error:** Game shows "MOVIE FILE NOT FOUND" SDL dialog and exits on PPC64
+even though movie files exist in `fedata/pc/movies/`.
+
+**Root cause:** On x86_64, `_sub_4642F0` (config parser reads `install.win`)
+sets `byte_512ECC = 1` which causes `_sub_4242F0` to **skip** movie init.
+On PPC64, `_sub_4642F0` is entirely skipped by a platform guard in
+`Methods_04.cpp:1356` so `byte_512ECC` stays 0 (BSS default).
+`dword_5134D8` (movie base path) is initialized to `L""` (empty) in
+`Entry.cpp:35-43`, so the game looks for `titleav.dct` in CWD instead of
+`fedata/pc/movies/titleav.dct`.  The file is not found → "MOVIE FILE NOT
+FOUND" → `ExitProcess` → triggers the allocator crash during cleanup.
+
+**Fix (`Entry.cpp:29-36`):** Set `byte_512ECC = 1` on PPC64 in `Entry.cpp`
+before game start, matching x86_64 behavior.  Movie init is skipped, no
+file access attempted, game proceeds to main menu.
+
+### Next steps
+1. Test on PPC64BE — both the allocator crash fix and the movie error fix should allow the game to boot to the main menu.
+2. Render loop and audio may have additional endianness bugs.
+3. If gameplay works, begin testing car selection, track loading, and physics for endian-breakage.
