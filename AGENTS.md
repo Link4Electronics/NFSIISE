@@ -387,6 +387,7 @@ All source files ported from SDL2 to SDL3.  Builds cleanly with zero warnings.
 - **Wrapper.c: pool_grow fallback to pre-allocated chunks** — when all addrs are skipped (already in pool_chunks from pool_preallocate), iterate pool_chunks and switch to one not yet used for bump allocation, tracked via `pool_bump_mask` bitmask to prevent cycling back to exhausted chunks
 - **Wrapper.c: guard page reservation (`pool_bump_sz`)** — last chunk mmap size = `POOL_SIZE * 4 + page_size` (~1 GB + 64 KB), but `pool_left = POOL_SIZE * 4` (~1 GB). The guard page is mapped but never handed out by `malloc32`, providing a safety catch for `read32`/`read64` overruns or unrolled STOSD writes within 64 KB of the pool boundary
 - **Wrapper.c: `pool_bump_sz[]` array** — stores bump-usable size per chunk (≤ `pool_chunk_sz[]`). Used by pool_preallocate and pool_grow fallback when setting `pool_left`, ensuring the guard reservation is maintained across chunk switches
+- **Wrapper.c: `malloc32` pool reserve** — condition changed from `pool_left < need` to `pool_left < need + page_size`. Reserves the last 64 KB of every chunk so the last bump allocation is never at the very edge. Combined with the guard page, gives 128 KB of safe overflow space for memset/STOSD overruns
 - **MemoryTranslate.cpp: PPC64 merged into ARM64 identity path** — `add_pool_range` no-op, `translate_x86_addr` only handles BSS/DATA x86 VAs
 - **BSS.h: removed `bss_pool()` redirect** — static `_bss` for all platforms
 - **Memory.cpp: removed `#if !defined(__powerpc64__)`** — `BssLayout _bss` always defined
@@ -396,7 +397,11 @@ All source files ported from SDL2 to SDL3.  Builds cleanly with zero warnings.
 - **Application.h: cleaned `za()` debug spam** — removed `fprintf` on PPC64
 
 ### Current status
-Game boots with SDL window visible, then crashes during `_doStart` while `___STOSD` (memset loop) writes near the end of the bump allocation space. The guard page reservation and pool_grow fallback together should provide enough room for `_doStart` by switching chunks when the first is exhausted, with the guard page protecting any boundary-crossing reads/writes from the STOSD loop.
+Game boots with SDL window visible, then crashes during `_doStart` while `___STOSD` (memset loop)
+writes near the end of the bump allocation space.  The guard page reservation and pool_grow
+fallback together should provide enough room for `_doStart` by switching chunks when the first
+is exhausted, with the guard page protecting any boundary-crossing reads/writes from the
+STOSD loop.
 
 ### Pool layout (PPC64)
 3 pre-allocated chunks (mmap via MAP_FIXED_NOREPLACE), consumed by bump allocator in decreasing size order:
@@ -409,6 +414,20 @@ Game boots with SDL window visible, then crashes during `_doStart` while `___STO
 
 The guard page `[0x80800000, 0x80810000)` is mapped R/W but never tracked by the bump allocator. Any read/write that overflows the bump space by ≤ 64 KB lands in accessible memory.
 
+### How the three safety layers work together
+Despite the guard reservation, `_doStart` still crashed at `p=0x8080FFFD` — the bump allocator's
+last allocation placed a buffer ending at `0x80800000`, and the game's memset overran the buffer
+through the entire 64 KB guard page, crashing 3 bytes before the guard end.  The crash was
+caused by `read32(0x8080FFFD)` reading byte[3] from `0x80810000` (one byte past the guard end).
+
+The three-layer fix:
+1. **Guard page** (`pool_bump_sz`): 64 KB mapped past bump end, never handed out by `malloc32`.
+2. **Pool reserve** (`malloc32`): reserve the last 64 KB of each chunk — `pool_left < need + page_size`
+   triggers `pool_grow` instead of `pool_left < need`. The last buffer is at least 64 KB from the
+   bump end, inside mapped chunk space.
+3. **Breathing room**: 64 KB reserve + 64 KB guard = 128 KB total safely-mapped memory past the
+   last allocation's nominal end.  The game's observed STOSD overrun (~65537 bytes) fits within this.
+
 ### Next steps
 1. Test the combined fixes on PPC64BE
-2. If game still crashes, check whether it needs more than ~1.64 GB total bump space
+2. If game still crashes, increase guard page size (e.g. `page_size * 2`) to handle larger overruns

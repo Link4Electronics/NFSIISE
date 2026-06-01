@@ -195,13 +195,6 @@ void pool_preallocate(void)
 		pool_cur  = pool_chunks[best];
 		pool_left = pool_bump_sz[best];
 		pool_bump_mask = (uint16_t)(1 << best);
-		fprintf(stderr, "POOL: %d chunks, best=%d, left=%zu (0x%zx), bump_mask=%04x\n",
-			pool_nchunks, best, pool_left, pool_left, pool_bump_mask);
-		for (int i = 0; i < pool_nchunks; i++)
-			fprintf(stderr, "  chunk[%d] = %p  sz=%zu (0x%zx)  bump_sz=%zu (0x%zx)\n",
-				i, pool_chunks[i],
-				pool_chunk_sz[i], pool_chunk_sz[i],
-				pool_bump_sz[i], pool_bump_sz[i]);
 	}
 	/* pool chunks are tracked in pool_chunks/pool_chunk_sz */
 	/* Targeted fallback for embedded x86 VAs not covered by pool_grow.
@@ -262,11 +255,19 @@ void *malloc32(size_t size)
 		pp = (void **)((char *)blk + sizeof(size_t));
 	}
 
-	/* Bump-allocate from the current pool chunk. */
-	if (pool_left < need) {
-		if (!pool_grow()) {
-			pthread_mutex_unlock(&pool_mtx);
-			return NULL;
+	/* Bump-allocate from the current pool chunk.
+	   Reserve page_size bytes at the end of each chunk so the last buffer
+	   is never at the very edge.  If the game overruns the buffer (e.g.
+	   unrolled STOSD loop), the reserved space plus the mapped guard page
+	   together provide 2 * page_size bytes of accessible memory before
+	   hitting unmapped addresses. */
+	{
+		size_t reserve = (size_t)sysconf(_SC_PAGE_SIZE);
+		if (pool_left < need + reserve) {
+			if (!pool_grow()) {
+				pthread_mutex_unlock(&pool_mtx);
+				return NULL;
+			}
 		}
 	}
 	void *blk = pool_cur;
