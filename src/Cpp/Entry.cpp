@@ -61,12 +61,12 @@ extern "C" void nfs2seEntrypoint()
 	   crashes any wrapper function that dereferences it (e.g.
 	   CreateDevice reading rguid from push32(dword_4E27D8)).
 
-	   Use MAP_FIXED_NOREPLACE (not MAP_FIXED) to avoid silently
-	   overwriting critical existing mappings (ld.so, libc, etc.)
-	   which causes jump-to-0x0 crashes when the PLT/GOT is corrupted.
-	   If the target address is occupied, skip the identity mapping
-	   — translate_truncated_addr() in the wrapper functions will
-	   convert truncated addresses back to full 64-bit host pointers. */
+	   Use MAP_FIXED_NOREPLACE to avoid silently overwriting existing
+	   mappings.  If the target page is occupied, scan up to PAGE_MAX_SCAN
+	   pages forward (then backward) for a free spot.  The offset within
+	   the first page is preserved so memcpy lands at the right struct
+	   offset within the mapped region, even if the mapping starts at a
+	   different page. */
 	{
 		uintptr_t h = (uintptr_t)&_data;
 		uintptr_t target = (uintptr_t)(uint32_t)h;
@@ -74,32 +74,70 @@ extern "C" void nfs2seEntrypoint()
 		uintptr_t pg = target & ~(uintptr_t)(ps - 1);
 		size_t off = target - pg;
 		size_t sz = (sizeof(DataLayout) + off + ps - 1) & ~(size_t)(ps - 1);
-		void *m = mmap((void*)pg, sz,
-		               PROT_READ|PROT_WRITE,
-		               MAP_FIXED_NOREPLACE|MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+#define PAGE_MAX_SCAN 512L
+		void *m = MAP_FAILED;
+		uintptr_t a = 0;
+		/* Scan: step 0 = target, then ±1, ±2, ... pages */
+		for (long step = 0; step <= PAGE_MAX_SCAN; ++step) {
+			long np = (step + 1) / 2;           /* 0,1,1,2,2,3,3,... */
+			uintptr_t d = (uintptr_t)np * (uintptr_t)ps;
+			if (step & 1)
+				a = pg + d;
+			else if (np == 0)
+				a = pg;
+			else if (d > pg)
+				continue;   /* underflow: skip */
+			else
+				a = pg - d;
+			if (a >= 0x100000000ULL) continue;
+			m = mmap((void*)a, sz, PROT_READ|PROT_WRITE,
+			         MAP_FIXED_NOREPLACE|MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+			if (m != MAP_FAILED)
+				break;
+		}
 		if (m != MAP_FAILED)
-			memcpy((void*)((uintptr_t)m + off), (void*)h, sizeof(DataLayout));
+			memcpy((void*)((uintptr_t)m + (target - a)),
+			       (void*)h, sizeof(DataLayout));
 		else
-			fprintf(stderr, "nfs2se: DATA identity map at 0x%lx failed "
-			        "(errno %d).  translate_truncated_addr will handle it.\n",
-			        (unsigned long)pg, errno);
+			fprintf(stderr, "nfs2se: DATA identity map near 0x%lx failed "
+			        "after scanning %ld pages.\n",
+			        (unsigned long)pg, PAGE_MAX_SCAN);
+#undef PAGE_MAX_SCAN
 	}
 	{
 		uintptr_t h = (uintptr_t)&_bss;
 		uintptr_t target = (uintptr_t)(uint32_t)h;
 		long ps = sysconf(_SC_PAGE_SIZE);
 		uintptr_t pg = target & ~(uintptr_t)(ps - 1);
-		size_t off = target - pg;
-		size_t sz = (sizeof(BssLayout) + off + ps - 1) & ~(size_t)(ps - 1);
-		void *m = mmap((void*)pg, sz,
-		               PROT_READ|PROT_WRITE,
-		               MAP_FIXED_NOREPLACE|MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+		size_t sz = (sizeof(BssLayout) + (target - pg) + ps - 1) & ~(size_t)(ps - 1);
+#define PAGE_MAX_SCAN 512L
+		void *m = MAP_FAILED;
+		uintptr_t a = 0;
+		for (long step = 0; step <= PAGE_MAX_SCAN; ++step) {
+			long np = (step + 1) / 2;
+			uintptr_t d = (uintptr_t)np * (uintptr_t)ps;
+			if (step & 1)
+				a = pg + d;
+			else if (np == 0)
+				a = pg;
+			else if (d > pg)
+				continue;
+			else
+				a = pg - d;
+			if (a >= 0x100000000ULL) continue;
+			m = mmap((void*)a, sz, PROT_READ|PROT_WRITE,
+			         MAP_FIXED_NOREPLACE|MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+			if (m != MAP_FAILED)
+				break;
+		}
 		if (m != MAP_FAILED)
-			memcpy((void*)((uintptr_t)m + off), (void*)h, sizeof(BssLayout));
+			memcpy((void*)((uintptr_t)m + (target - a)),
+			       (void*)h, sizeof(BssLayout));
 		else
-			fprintf(stderr, "nfs2se: BSS identity map at 0x%lx failed "
-			        "(errno %d).  translate_truncated_addr will handle it.\n",
-			        (unsigned long)pg, errno);
+			fprintf(stderr, "nfs2se: BSS identity map near 0x%lx failed "
+			        "after scanning %ld pages.\n",
+			        (unsigned long)pg, PAGE_MAX_SCAN);
+#undef PAGE_MAX_SCAN
 	}
 #endif
 

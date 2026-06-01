@@ -68,6 +68,7 @@ uint32_t translate_host_to_x86(const void *host_addr)
    truncation. */
 uintptr_t translate_truncated_addr(uint32_t truncated)
 {
+	static int diag_printed = 0;
 	uintptr_t t = (uintptr_t)truncated;
 
 	/* Check BSS range (truncated host address). */
@@ -82,6 +83,22 @@ uintptr_t translate_truncated_addr(uint32_t truncated)
 		uintptr_t data_trunc = (uint32_t)s_trans.data_base;
 		if (t >= data_trunc && t - data_trunc < s_trans.data_size)
 			return s_trans.data_base + (t - data_trunc);
+	}
+
+	if (!diag_printed) {
+		fprintf(stderr, "translate_truncated_addr(0x%x): miss "
+		        "bss{trunc=0x%lx base=0x%lx size=%zu} "
+		        "data{trunc=0x%lx base=0x%lx size=%zu} "
+		        "t=0x%lx t-bss_trunc=0x%lx t-data_trunc=0x%lx\n",
+		        truncated,
+		        (unsigned long)(uint32_t)s_trans.bss_base,
+		        (unsigned long)s_trans.bss_base, s_trans.bss_size,
+		        (unsigned long)(uint32_t)s_trans.data_base,
+		        (unsigned long)s_trans.data_base, s_trans.data_size,
+		        (unsigned long)t,
+		        (unsigned long)(t - (uint32_t)s_trans.bss_base),
+		        (unsigned long)(t - (uint32_t)s_trans.data_base));
+		diag_printed = 1;
 	}
 
 	/* Everything else (pool, code) is already identity-mapped. */
