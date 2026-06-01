@@ -604,7 +604,7 @@ FOUND" → `ExitProcess` → triggers the allocator crash during cleanup.
 
 **Fix (`Entry.cpp:29-36`):** Set `byte_512ECC = 1` on PPC64 in `Entry.cpp`
 before game start, matching x86_64 behavior.  Movie init is skipped, no
-file access attempted, game proceeds to main menu.
+file access attempted, game proceeds to main menu. This didn't happen, so who knows about this, maybe byte_512ECC = 1 just to say that found titleav.dct and game assets probably placed accordingly.
 
 ### Fixed: `_strcmp_` null-guard (`Methods_10.cpp:1399-1414`)
 
@@ -646,6 +646,40 @@ After this, `_sub_484510` finds initialized bucket structs at `dword_563D80[0]`
 and `dword_563D80[3]` and can sub-allocate file data buffers from the pool
 ranges established by `_sub_48438C`.
 
+### Fixed: hash-table slot marker for `calloc_wrap` fallback (`Methods_06.cpp:18905-18913`)
+
+**Crash chain:** `_sub_486F40("install.win")` fails because `_sub_487668` can't
+create a hash-table entry.  The code path at line 6795 checks `dword_4DB5F8`
+(always 0 on PPC64 — never written by transpiled code) and returns failure.
+
+**Root cause:** On x86_64, `_sub_484498()` allocates the hash table from the
+BSS allocator which returns uninitialized (non-zero) memory.  The game uses
+`0xFFFFFFFF` as the empty-slot marker, and uninitialized memory happens to
+contain `0xFFFFFFFF` in some slots.  On PPC64, the `calloc_wrap` fallback
+returns zeroed memory, making EVERY slot appear used.  `_sub_45A560` can never
+find a free slot → returns 0 → `_sub_487668` falls to the `dword_4DB5F8` check
+→ returns 0 → file loading fails.
+
+**Fix (`Methods_06.cpp:18905-18913`):** After allocating the hash table via
+`calloc_wrap`, loop over each 32-byte slot and write `0xFFFFFFFF` to the first
+4 bytes.  This restores the same empty-slot state that uninitialized memory
+provides on x86_64.
+
+### Fixed: `_sub_408CC0` null-pointer dereference (`Methods_01.cpp:10748`)
+
+**Crash:** `al = to8i(esi)` at `Methods_01.cpp:10751` where `esi=0` — returned
+from `_sub_41B710()` when `dword_4D4AE0` is null (file data not loaded).
+
+**Root cause:** When file loading fails (e.g., because the hash table has no
+empty slots), `dword_4D4AE0` stays null.  Downstream functions that read from
+it (`_sub_41B710`) return 0, and their callers (`_sub_408CC0`) dereference it
+without checking.
+
+**Fix (`Methods_01.cpp:10748`):** PPC64-only null guard — if `_sub_41B710`
+returns 0, skip the character-copy loop and write a null-terminator to the
+stack buffer.  Uses a clean epilog (`loc_408CC0_null`) that balances the stack
+and returns without calling `_sub_41B620`.
+
 ### Summary of all PPC64 fixes (June 2026)
 
 | # | Fix | File | Prevents |
@@ -660,10 +694,12 @@ ranges established by `_sub_48438C`.
 | 8 | `_strcmp_` null-guard | Methods_10.cpp:1399-1414 | Crash on null config strings |
 | 9 | `_sub_41B710` null pointer guard | Methods_02.cpp:8321 | Crash in file-load chain |
 | 10 | Hash-table alloc `calloc_wrap` fallback | Methods_06.cpp:18898-18900 | Hash table creation failure |
-| 11 | Free-list pre-init `dword_563F04` | Entry.cpp | BSS allocator init crash |
-| 12 | `byte_512ECC = 1` skip movie init | Entry.cpp:29-36 | "MOVIE FILE NOT FOUND" |
-| 13 | Config parser re-enabled | Methods_04.cpp:1356 | BSS fields stay default |
-| 14 | Byte-order initializer swap | SwapInit.h | TLS size 0xF4000000 overflow |
+| 11 | Hash-table slot marker init | Methods_06.cpp:18905-18913 | Empty-slot marker (0xFFFFFFFF) |
+| 12 | Free-list pre-init `dword_563F04` | Entry.cpp | BSS allocator init crash |
+| 13 | `byte_512ECC = 1` skip movie init | Entry.cpp:29-36 | "MOVIE FILE NOT FOUND" |
+| 14 | `_sub_408CC0` null guard | Methods_01.cpp:10748 | Crash in file-read chain |
+| 15 | Config parser re-enabled | Methods_04.cpp:1356 | BSS fields stay default |
+| 16 | Byte-order initializer swap | SwapInit.h | TLS size 0xF4000000 overflow |
 
 ### Known structural issue: BSS fields that should be DATA
 

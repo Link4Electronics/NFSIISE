@@ -10746,6 +10746,11 @@ Fn(void) Game::_sub_408CC0()
 	edi = esp; //mov
 	esp -= 4; _sub_41B710(); esp += 4; //call
 	esi = eax; //mov
+#if defined(__powerpc64__) || defined(__PPC64__)
+	test(esi, esi);
+	if (jz())
+		goto loc_408CC0_null;
+#endif
 	push32(edi);
 loc_408CE1:
 	al = to8i(esi); //mov
@@ -10855,6 +10860,15 @@ loc_408D90:
 	pop32(esi);
 	pop32(ecx);
 	return;
+#if defined(__powerpc64__) || defined(__PPC64__)
+loc_408CC0_null:
+	to8i(edi) = 0; // null-terminate buffer (empty string)
+	add(esp, (int32_t)0x50);
+	pop32(edi);
+	pop32(esi);
+	pop32(ecx);
+	return;
+#endif
 loc_408D9D:
 	esi = esp; //mov
 	edi = (int32_t)(intptr_t)dword_512F4C; //mov

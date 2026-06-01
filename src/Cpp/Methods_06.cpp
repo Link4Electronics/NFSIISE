@@ -18901,10 +18901,21 @@ loc_45AC81:
 	   initialized (the x86 startup code that sets them up doesn't
 	   work on PPC64).  Use calloc_wrap instead — it uses malloc32
 	   which allocates from the pool via MAP_FIXED and works on all
-	   platforms. */
+	   platforms.
+	   IMPORTANT: calloc zeros the memory, but the hash table uses
+	   0xFFFFFFFF as the empty-slot marker.  Without initialization
+	   every slot appears used and _sub_45A560 can never find a free
+	   slot, causing all file-loading to fail.  We fill each slot's
+	   first 4 bytes with 0xFFFFFFFF. */
 	eax = calloc_wrap(1, esi);
 	to32i(dword_4D6A60) = eax; //mov
 	to32i(dword_4D6A5C) = ecx; //mov — ecx still = 0x40
+	if (eax)
+	{
+		uint8_t *p = (uint8_t *)(intptr_t)eax;
+		for (int32_t i = 0; i < esi; i += 0x20)
+			Application::write32(p + i, (int32_t)0xFFFFFFFF);
+	}
 #else
 	esp -= 4; _sub_484498(); esp += 4; //call
 	to32i(dword_4D6A60) = eax; //mov
