@@ -1397,6 +1397,24 @@ Fn(void) Game::_strcmp_()
 	push32(ebx);
 	push32(ecx);
 	ebx = eax; //mov
+	test(eax, eax);
+	if (jz())
+	{
+		pop32(ecx);
+		pop32(ebx);
+		xor_(eax, eax);
+		dec(eax);
+		return;
+	}
+	test(edx, edx);
+	if (jz())
+	{
+		pop32(ecx);
+		pop32(ebx);
+		xor_(eax, eax);
+		dec(eax);
+		return;
+	}
 	cmp(eax, edx);
 	if (jz())
 		goto loc_483794;
