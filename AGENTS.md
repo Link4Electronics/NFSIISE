@@ -433,6 +433,65 @@ STOSD TLS overflow and DirectInput null-pointer crash are fixed. The `CreateDevi
 
 The guard pages `[0x80800000, 0x80840000)` are mapped R/W but never tracked by the bump allocator. Any read/write that overflows the bump space by ≤ 256 KB lands in accessible memory.
 
+### Fixed: null‑pointer crash in `_sub_484D94` (crash #3)
+
+**Crash:** `read32(p=0x14)` at `Application.h:159` called from `to32i(eax+0x14)` in
+`_sub_484D94` (`Methods_10.cpp:3161`), where `eax=0`.
+
+**Root cause:** `_sub_486F40` returns 0 because the hash‑table entry for
+"install.win" is never created — the allocator `_sub_4A5124` gates on `dword_59C614`,
+which is BSS (always 0) on all platforms.  On x86_64 `_sub_4642F0` is never reached
+(either the entry is pre‑loaded or a different code path avoids it).  On PPC64 the
+code proceeds to the broken allocator path.
+
+**Fix (`Methods_10.cpp:3161`):** Null guard — skip the `to32i(eax+0x14)` when
+`eax == 0`.
+
+### Fixed: PPC64 allocator deadlock (hang in `WaitForMultipleObjects_wrap`)
+
+**Hang:** `_sub_4A513C` calls `_sub_489E5C` → `WaitForMultipleObjects_wrap` with
+INFINITE timeout on an auto‑reset event that is never signaled.
+
+**Root cause:** `_sub_4A5068` on PPC64 returned early without reaching `loc_4A509D`
+(the code path that calls `SetEvent`).  The event handle (stored in `dword_4DDAA8`)
+exists but remains non‑signaled.
+
+**Fix (`Methods_13.cpp:7768-7773`):** The PPC64 `#if` path in `_sub_4A5068` jumps to
+`loc_4A509D` (which signals the event and sets `dword_4DDAA4 = 1`) instead of
+returning early.  This is identical to the x86_64 behavior when `dword_59C614 == 0`.
+
+### Fixed: PPC64 allocator gated on `dword_59C614` (broken BSS call‑indirection)
+
+**Crash chain:** `_sub_4A5124` at `Methods_13.cpp:7813` checks `dword_59C614` — BSS
+field that should store a function pointer via `_sub_4A5060` during initialization.
+The init function `_sub_496700` is never called (gated on `byte_4DDA74[0]==0`), so
+`dword_59C614` stays 0 and the allocator returns early.
+
+Even if `dword_59C614` were set, the value is a **truncated host pointer**
+(`(int32_t)(intptr_t)sub_495CAC`) — the high 32 bits are lost on PPC64 where the
+binary lives above 4 GB.  `call(to32i(dword_59C614))` would cast the low 32 bits
+to `uintptr_t` (zero‑extended), producing an unmapped address → SIGSEGV.
+
+**Fix (`Methods_13.cpp:7828-7835, 7768-7773`):** Two PPC64 changes:
+
+1. **`_sub_4A5124`** — skip the `dword_59C614` check entirely; go directly to
+   the allocator path (`loc_4A5137`) as long as `dword_4DABCC != 0` (always true).
+2. **`_sub_4A5068`** — skip the `call(to32i(dword_59C614))` and jump to the
+   event‑signaling path (`loc_4A509D`) instead.  The skipped function
+   `sub_495CAC` is a no‑op on all platforms (`byte_4DDA74[0]==0`), so omitting it
+   is safe.
+
+### Transpiler‑register‑mapping note
+
+The original x86 for `_sub_484D94` had `mov eax, 1` before `call _sub_4848B0`,
+but the transpiler generated `edx = 1`.  `_sub_4848B0` reads the type parameter
+from `eax` (via `ecx = eax`), so `edx = 1` is a no‑op.  On x86_64 this is
+harmless because `eax` already contains the correct value (entry address).  A
+previous attempt to fix this (`eax = 1`) broke x86_64 by overwriting the entry
+address — **reverted**.  The null guard remains as the sole change.
+
 ### Next steps
-1. Test on PPC64BE — the STOSD crash should be gone and the DirectInput initialization should work.
-2. The game may crash further along (audio, rendering, etc.) as subsequent bugs are unmasked by fixing earlier crashes.
+1. Test on PPC64BE — the allocator deadlock fix should let the game proceed past `_sub_4642F0`.
+2. The game may crash further along (rendering, audio, etc.) as subsequent bugs are unmasked.
+3. If the allocator still hangs, check whether the `SetEvent` in `_sub_482270` callbacks triggers correctly on PPC64.
+4. Investigate whether `byte_4DDA74[0]` should be set to `1` to enable the full allocator initialization path (`_sub_496700`/`_sub_495CAC`).

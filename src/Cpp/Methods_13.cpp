@@ -7766,16 +7766,11 @@ Fn(void) Game::_sub_4A5068()
 		goto loc_4A5091;
 loc_4A5075:
 #if defined(__powerpc64__) || defined(__PPC64__)
-	/* PPC64: dword_59C614 contains a truncated host pointer, not usable
-	   as a call target.  The function it stores (sub_495CAC) does nothing
-	   when byte_4DDA74[0]==0, so skip the check and the call entirely.
-	   Just set dword_4DDAA4=0 as the called init would do, and return. */
-	xor_(edi, edi);
-	eax = edx; //mov
-	to32i(dword_4DDAA4) = edi; //mov
-	pop32(edi);
-	pop32(edx);
-	return;
+	/* PPC64: dword_59C614 stores a truncated host pointer — unusable as a
+	   call target.  sub_495CAC does nothing (byte_4DDA74[0]==0), so skip
+	   the call.  Signal the event (created at loc_4A5091 above) so that
+	   _sub_4A513C's wait can proceed, same as the dword_59C614==0 path. */
+	goto loc_4A509D;
 #else
 	cmp(to32i(dword_59C614), (int32_t)0);
 	if (jz())
