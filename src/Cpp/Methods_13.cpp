@@ -7765,6 +7765,18 @@ Fn(void) Game::_sub_4A5068()
 	if (jz())
 		goto loc_4A5091;
 loc_4A5075:
+#if defined(__powerpc64__) || defined(__PPC64__)
+	/* PPC64: dword_59C614 contains a truncated host pointer, not usable
+	   as a call target.  The function it stores (sub_495CAC) does nothing
+	   when byte_4DDA74[0]==0, so skip the check and the call entirely.
+	   Just set dword_4DDAA4=0 as the called init would do, and return. */
+	xor_(edi, edi);
+	eax = edx; //mov
+	to32i(dword_4DDAA4) = edi; //mov
+	pop32(edi);
+	pop32(edx);
+	return;
+#else
 	cmp(to32i(dword_59C614), (int32_t)0);
 	if (jz())
 		goto loc_4A509D;
@@ -7775,6 +7787,7 @@ loc_4A5075:
 	pop32(edi);
 	pop32(edx);
 	return;
+#endif
 loc_4A5091:
 	esp -= 4; _sub_489E0C(); esp += 4; //call
 	to32i(dword_4DDAA8) = eax; //mov
@@ -7810,6 +7823,15 @@ loc_4A5105:
 }
 Fn(void) Game::_sub_4A5124()
 {
+#if defined(__powerpc64__) || defined(__PPC64__)
+	/* PPC64: dword_59C614 stores a truncated host pointer, unusable as call target.
+	   Skip the check — dword_59C614 is never set (byte_4DDA74[0]==0 prevents init),
+	   and the function it points to (sub_495CAC) is a no-op anyway. */
+	cmp(to32i(dword_4DABCC), (int32_t)0);
+	if (jnz())
+		goto loc_4A5137;
+	return;
+#else
 	cmp(to32i(dword_59C614), (int32_t)0);
 	if (jz())
 		goto locret_4A5136;
@@ -7818,6 +7840,7 @@ Fn(void) Game::_sub_4A5124()
 		goto loc_4A5137;
 locret_4A5136:
 	return;
+#endif
 loc_4A5137:
 	esp -= 4; _sub_4A5068(); esp += 4; //call
 	_sub_4A513C(); return; //jmp
