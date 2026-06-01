@@ -16797,6 +16797,10 @@ loc_4223E9:
 	push32(ebx);
 	push32(lpEventAttributes);
 	eax = to32i(dword_4D4C44); //mov
+	fprintf(stderr, "push32(dword_4E27D8): host=&_data=0x%lx field=&_data.dword_4E27D8=0x%lx trunc=%d\n",
+	        (unsigned long)(uintptr_t)&_data,
+	        (unsigned long)(uintptr_t)((int8_t *)&_data.dword_4E27D8),
+	        (int32_t)(uintptr_t)((int8_t *)&_data.dword_4E27D8));
 	push32(dword_4E27D8);
 	edx = to32i(eax); //mov
 	push32(eax);
