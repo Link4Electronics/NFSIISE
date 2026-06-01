@@ -481,6 +481,26 @@ to `uintptr_t` (zero‑extended), producing an unmapped address → SIGSEGV.
    `sub_495CAC` is a no‑op on all platforms (`byte_4DDA74[0]==0`), so omitting it
    is safe.
 
+### Fixed: PPC64 crash in `_sub_4643B0` (null pointer from failed hash-table entry)
+
+**Crash:** `to8i(eax)` at `Methods_07.cpp:6239` where `eax = 3` (unmapped).
+
+**Root cause:** `_sub_486F40("install.win")` returns 0 because the hash-table
+entry creation in `_sub_487668` fails — the function gates on `dword_4DB5F8`
+and `byte_4DB574`, both of which are DATA fields that are never set on PPC64
+(the original x86 game relied on config-file parsing or earlier init code to
+set them).  `_sub_4642F0` then uses 0 as a base address, computes `0 + 3 = 3`,
+and tries to read a byte from address 3 → SIGSEGV.
+
+**Fix (`Methods_07.cpp:6155-6163`):** PPC64-only null guard after
+`_sub_486F40()` returns: if `eax == 0`, jump to `loc_464354` (the early exit
+path that returns without processing the entry).  Mirrors the null-guard
+pattern used in `_sub_484D94`.
+
+**Why not on x86_64:** `_sub_486F40` always returns a valid pointer on x86_64
+(the hash-table init code works because the relevant DATA/BSS fields are
+initialised through paths that only exist on x86_64).
+
 ### Transpiler‑register‑mapping note
 
 The original x86 for `_sub_484D94` had `mov eax, 1` before `call _sub_4848B0`,
@@ -491,7 +511,7 @@ previous attempt to fix this (`eax = 1`) broke x86_64 by overwriting the entry
 address — **reverted**.  The null guard remains as the sole change.
 
 ### Next steps
-1. Test on PPC64BE — the allocator deadlock fix should let the game proceed past `_sub_4642F0`.
+1. Test on PPC64BE — the `_sub_486F40` null guard should prevent the crash at `_sub_4643B0`.  The game may proceed further or exit via `_sub_480200` → `_ExitProcess0` if `dword_4DAB5C` logic diverges.
 2. The game may crash further along (rendering, audio, etc.) as subsequent bugs are unmasked.
-3. If the allocator still hangs, check whether the `SetEvent` in `_sub_482270` callbacks triggers correctly on PPC64.
-4. Investigate whether `byte_4DDA74[0]` should be set to `1` to enable the full allocator initialization path (`_sub_496700`/`_sub_495CAC`).
+3. If the game reaches the main menu, begin testing gameplay for endian-breakage.
+4. If the game exits early, check whether `dword_4DAB5C` has the wrong value on PPC64 (it should be 0 but appears non-zero, and the reason is still unknown).

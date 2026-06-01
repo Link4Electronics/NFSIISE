@@ -6152,6 +6152,15 @@ Fn(void) Game::_sub_4642F0()
 	eax = (int32_t)(intptr_t)aInstall_win_0; //mov
 	xor_(edx, edx);
 	esp -= 4; _sub_486F40(); esp += 4; //call
+#if defined(__powerpc64__) || defined(__PPC64__)
+	/* PPC64: hash-table entry creation may fail (allocator init incomplete).
+	   Skip entry processing if lookup returned 0 to avoid null-pointer
+	   crash in _sub_4643B0's to8i(eax).  On x86_64 _sub_486F40 always
+	   returns a valid pointer; on PPC64 it may be 0. */
+	test(eax, eax);
+	if (jz())
+		goto loc_464354;
+#endif
 	to32i(dword_513504) = eax; //mov
 	to32i(esp) = eax; //mov
 	esp -= 4; _sub_484D94(); esp += 4; //call
