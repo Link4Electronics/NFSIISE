@@ -6222,6 +6222,16 @@ Fn(void) Game::_sub_487060()
 	push32(esi);
 	push32(edi);
 	edx = eax; //mov
+#if defined(__powerpc64__) || defined(__PPC64__)
+	if (!edx) {
+		pop32(edi);
+		pop32(esi);
+		pop32(edx);
+		pop32(ecx);
+		pop32(ebx);
+		return;
+	}
+#endif
 	ecx = to32i(eax+0x1C); //mov
 	add(ecx, eax);
 	eax = to32i(eax+0xD); //mov
