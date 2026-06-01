@@ -10419,7 +10419,23 @@ loc_4088B9:
 	if (jnz())
 		goto loc_408A16;
 	al = 1; //mov
+#if !defined(__powerpc64__) && !defined(__PPC64__)
 	to8i(byte_512ECC) = al; //mov
+#endif
+	eax = ebp; //mov
+	pop32(ebx);
+	pop32(esi);
+	pop32(edi);
+	add(esp, (int32_t)0x118);
+	pop32(ebp);
+	pop32(edx);
+	pop32(ecx);
+	return;
+loc_408A16:
+	xor_(al, al);
+#if !defined(__powerpc64__) && !defined(__PPC64__)
+	to8i(byte_512ECC) = al; //mov
+#endif
 	eax = ebp; //mov
 	pop32(ebx);
 	pop32(esi);

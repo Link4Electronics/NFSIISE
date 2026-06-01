@@ -9594,6 +9594,17 @@ Fn(void) Game::_sub_4A63B0()
 	pop32(edx);
 	return;
 loc_4A63C7:
+#if defined(__powerpc64__) || defined(__PPC64__)
+	/* PPC64: _sub_49E448 treats its argument (dword_4DD774) as a heap
+	   structure pointer and reads from it at negative offsets.  On PPC64
+	   the BSS/DATA allocator is skipped in _sub_4A62F8, so dword_4DD774
+	   should be 0 (DATA initializer).  If it is somehow non-zero (e.g. 1),
+	   _sub_49E448 will crash on to32i(eax-4) → read32(0xFFFFFFFD).
+	   Skip the allocator cleanup call and just zero the field. */
+	xor_(ecx, ecx);
+	to32i(dword_4DD774) = ecx; //mov
+	to32i(dword_4DD778) = ecx; //mov
+#else
 	push32(ecx);
 	eax = edx; //mov
 	xor_(ecx, ecx);
@@ -9601,6 +9612,7 @@ loc_4A63C7:
 	to32i(dword_4DD774) = ecx; //mov
 	to32i(dword_4DD778) = ecx; //mov
 	pop32(ecx);
+#endif
 	xor_(esi, esi);
 	to32i(dword_4DD77C) = esi; //mov
 	pop32(esi);
