@@ -43,8 +43,7 @@
 #define POOL_SIZE  (258UL * 1024 * 1024)   /* 258 MB per pool chunk */
 #define POOL_ALIGN 16
 
-/* add_pool_range: on PPC64 it's defined in MemoryTranslate.cpp;
-   on ARM64 / fallback it's a static inline no‑op from MemoryTranslate.h. */
+/* add_pool_range: no-op on all platforms (pool is identity-mapped). */
 #include "Cpp/MemoryTranslate.h"
 
 static void *pool_freelist = NULL;  /* linked through the first pointer-sized
@@ -87,8 +86,10 @@ extern char _end[];
 
 static int pool_grow(void)
 {
+	static long page_size = 0;
+	if (!page_size) page_size = sysconf(_SC_PAGE_SIZE);
 	/* Compute the page-aligned start just above the binary's data/BSS. */
-	uintptr_t low_start = ((uintptr_t)_end + 0xFFF) & ~(uintptr_t)0xFFF;
+	uintptr_t low_start = ((uintptr_t)_end + page_size - 1) & ~(uintptr_t)(page_size - 1);
 	if (low_start >= POOL_LOW_MAX)
 		low_start = 0x01000000;  /* fallback: shouldn't happen */
 
@@ -204,64 +205,6 @@ void pool_preallocate(void)
 			add_pool_range(low_addrs[i], (uintptr_t)p, sz);
 		}
 	}
-#if defined(__powerpc64__) || defined(__PPC64__)
-	/* Fallback for addresses in addrs[] (PPC64 only — ARM64 has identity
-	   mapping for all chunks and no translation layer). */
-	{
-		static const uintptr_t addrs_check[] = {
-			0x20000000, 0x40000000,
-			0x30000000, 0x50000000, 0x60000000, 0x70000000,
-			0x01B9E000, 0x02000000, 0x03000000,
-			0x18000000, 0x28000000, 0x38000000,
-		};
-		for (int i = 0;
-		     i < (int)(sizeof addrs_check / sizeof addrs_check[0]); i++) {
-			/* Check if ANY existing pool chunk's RANGE covers
-			   this address (use in_pool for range check). */
-			if (in_pool((const void *)(uintptr_t)addrs_check[i])) {
-				continue;
-			}
-			/* Also skip exact matches already in pool_chunks. */
-			{
-				int found = 0;
-				for (int j = 0; j < pool_nchunks; j++)
-					if ((uintptr_t)pool_chunks[j] == addrs_check[i])
-						{ found = 1; break; }
-				if (found) {
-					continue;
-				}
-			}
-				size_t need;
-			if (addrs_check[i] < POOL_LOW_MAX)
-				need = POOL_LOW_MAX - addrs_check[i];
-			else
-				need = POOL_SIZE;
-			void *backing = NULL;
-			size_t actual = 0;
-			/* Try decreasing sizes until we get a valid mapping.
-			   The backing address may be above 4 GB — that's fine
-			   because the result is returned as a 64-bit uintptr_t
-			   from translate_x86_addr, and the game never directly
-			   stores these addresses in 32-bit registers. */
-			for (size_t try_sz = need; try_sz >= 4UL * 1024 * 1024;
-			     try_sz >>= 1) {
-				backing = mmap(NULL, try_sz,
-					       PROT_READ | PROT_WRITE,
-					       MAP_PRIVATE | MAP_ANONYMOUS,
-					       -1, 0);
-				if (backing == MAP_FAILED) continue;
-				actual = try_sz;
-				break;
-			}
-			if (backing == MAP_FAILED || backing == NULL ||
-			    actual == 0) {
-				continue;
-			}
-			add_pool_range((uint32_t)addrs_check[i],
-				       (uintptr_t)backing, actual);
-		}
-	}
-#endif
 	pthread_mutex_unlock(&pool_mtx);
 }
 

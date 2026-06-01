@@ -22,10 +22,6 @@ extern "C" void nfs2seEntrypoint()
 	init_translation(
 		(uintptr_t)&_bss,  sizeof(_bss),
 		(uintptr_t)&_data, sizeof(_data));
-
-#if defined(__powerpc64__) || defined(__PPC64__)
-	pool_preallocate(); /* second call is a no-op if main() already did it */
-#endif
 #endif
 
 #if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)

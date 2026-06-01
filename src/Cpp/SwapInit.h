@@ -2,7 +2,6 @@
 static void swap_initial_data() {
     uint32_t *p32;
     uint16_t *p16;
-#if !defined(__powerpc64__) && !defined(__PPC64__)
 #undef dword_4E5010
     p32 = (uint32_t *)&_bss.dword_4E5010; for(size_t i=0;i<1;i++) p32[i]=le32toh(p32[i]);
 #undef dword_4E5014
@@ -3067,7 +3066,6 @@ static void swap_initial_data() {
     p32 = (uint32_t *)&_bss.dword_5B9D94; for(size_t i=0;i<3;i++) p32[i]=le32toh(p32[i]);
 #undef dword_5BA4E4
     p32 = (uint32_t *)&_bss.dword_5BA4E4; for(size_t i=0;i<256;i++) p32[i]=le32toh(p32[i]);
-#endif /* !__powerpc64__ */
 #undef dword_401010
     p32 = (uint32_t *)&_data.dword_401010; for(size_t i=0;i<12;i++) p32[i]=le32toh(p32[i]);
 #undef word_401042

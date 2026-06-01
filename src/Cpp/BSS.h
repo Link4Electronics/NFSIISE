@@ -3668,17 +3668,3 @@ struct packed BssLayout {
 
 };
 extern BssLayout _bss alignas(4);
-#if defined(__powerpc64__) || defined(__PPC64__)
-/* On PPC64, the static _bss above wastes binary BSS space but is
-   unused — redirect all _bss-macro references to a pool-allocated copy. */
-inline BssLayout &bss_pool() {
-	static BssLayout *p = []{
-		void *mem = malloc32(sizeof(BssLayout));
-		__builtin_memset(mem, 0, sizeof(BssLayout));
-		return static_cast<BssLayout *>(mem);
-	}();
-	return *p;
-}
-#undef _bss
-#define _bss bss_pool()
-#endif

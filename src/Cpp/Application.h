@@ -11,19 +11,13 @@ struct Application : public CPU
 
 	/* Zero-extend a possibly-negative int32 to uintptr_t so that
 	   addresses >= 0x80000000U are not sign-extended to kernel space.
-	   Also translate x86 virtual addresses to host pointers. */
+	   Also translate x86 virtual addresses to host pointers.  Pool
+	   and code addresses are identity-mapped — only BSS/DATA x86 VAs
+	   need actual translation. */
 	template<typename T>
 	static FnInl(uintptr_t) za(const T a)
 	{
-		static volatile int za_count = 0;
-		int cnt = za_count++;
-		uintptr_t result = translate_x86_addr((uint32_t)(intptr_t)a);
-		if (cnt < 10) {
-			fprintf(stderr, "za(%p) -> 0x%lx [%d]\n",
-				(void*)(uintptr_t)a, (unsigned long)result, cnt);
-			fflush(stderr);
-		}
-		return result;
+		return translate_x86_addr((uint32_t)(intptr_t)a);
 	}
 
 	/* All x86 data is little-endian in memory (both BSS/DATA and pool
