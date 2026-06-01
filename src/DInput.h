@@ -5,8 +5,8 @@
 
 #include "Wrapper.h"
 
-#include <SDL2/SDL_joystick.h>
-#include <SDL2/SDL_haptic.h>
+#include <SDL3/SDL_joystick.h>
+#include <SDL3/SDL_haptic.h>
 
 #include <stdint.h>
 

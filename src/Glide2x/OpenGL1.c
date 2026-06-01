@@ -8,9 +8,9 @@ extern void *malloc32(size_t);
 extern void free32(void *);
 #endif
 
-#include <SDL2/SDL_stdinc.h>
-#include <SDL2/SDL_opengl.h>
-#include <SDL2/SDL_video.h>
+#include <SDL3/SDL_stdinc.h>
+#include <SDL3/SDL_opengl.h>
+#include <SDL3/SDL_video.h>
 
 void SetBrightness(float);
 
@@ -251,7 +251,7 @@ REALIGN STDCALL void grGlideInit(void)
 }
 REALIGN STDCALL void grGlideShutdown(void)
 {
-	SDL_GL_DeleteContext(glCtx);
+	SDL_GL_DestroyContext(glCtx);
 	palette = NULL;
 	glCtx = NULL;
 

@@ -3,7 +3,7 @@
 #include "Wrapper.h"
 #include "Cpp/ByteUtils.h"
 
-#include <SDL2/SDL_timer.h>
+#include <SDL3/SDL_timer.h>
 
 static SDL_TimerID timerID;
 

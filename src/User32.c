@@ -2,10 +2,10 @@
 
 #include "User32.h"
 
-#include <SDL2/SDL_messagebox.h>
-#include <SDL2/SDL_events.h>
-#include <SDL2/SDL_video.h>
-#include <SDL2/SDL_timer.h>
+#include <SDL3/SDL_messagebox.h>
+#include <SDL3/SDL_events.h>
+#include <SDL3/SDL_video.h>
+#include <SDL3/SDL_timer.h>
 
 static const uint8_t sdl_to_windows_scancode_table[100] =
 {
@@ -36,19 +36,20 @@ float touchDX = 0.0f, touchDY = 0.0f;
 static float touchDXY = 0.0f;
 static uint32_t touchTimeStamp = 0;
 static SDL_TimerID tapEnterTimerId = 0;
-static uint32_t tapEnterTimerCallback(uint32_t interval, void *param)
+static Uint32 tapEnterTimerCallback(void *userdata, SDL_TimerID timerID, Uint32 interval)
 {
+	(void)userdata; (void)timerID;
 	SDL_Event event;
 	memset(&event, 0, sizeof event);
-	event.key.keysym.sym = SDLK_RETURN;
-	event.key.keysym.scancode = SDL_SCANCODE_RETURN;
+	event.key.key = SDLK_RETURN;
+	event.key.scancode = SDL_SCANCODE_RETURN;
 	if (interval == 1)
 	{
-		event.type = SDL_KEYDOWN;
+		event.type = SDL_EVENT_KEY_DOWN;
 		SDL_PushEvent(&event);
 		return 100;
 	}
-	event.type = SDL_KEYUP;
+	event.type = SDL_EVENT_KEY_UP;
 	SDL_PushEvent(&event);
 	tapEnterTimerId = 0;
 	return 0;
@@ -62,7 +63,7 @@ static uint32_t tapEnterTimerCallback(uint32_t interval, void *param)
 #endif
 
 static SDL_TimerID timerID;
-uint32_t watchdogTimer(uint32_t interval, void *param);
+Uint32 watchdogTimer(void *userdata, SDL_TimerID timerID, Uint32 interval);
 
 REALIGN STDCALL uint32_t DefWindowProcA_wrap(void *hWnd, uint32_t uMsg, uint32_t wParam, uint32_t lParam)
 {
@@ -90,7 +91,7 @@ REALIGN STDCALL BOOL PostMessageA_wrap(void *hWnd, uint32_t uMsg, uint32_t wPara
 	if (uMsg >= WM_USER && uMsg < WM_USER_END)
 	{
 		SDL_Event event;
-		event.type = uMsg + SDL_USEREVENT - WM_USER;
+		event.type = uMsg + SDL_EVENT_USER - WM_USER;
 		event.user.code = lParam;
 		return SDL_PushEvent(&event) == 1;
 	}
@@ -109,36 +110,31 @@ REALIGN STDCALL BOOL GetMessageA_wrap(MSG *msg, void *hWnd, uint32_t wMsgFilterM
 		{
 			switch (event.type)
 			{
-				case SDL_APP_WILLENTERBACKGROUND:
+				case SDL_EVENT_WILL_ENTER_BACKGROUND:
 					msg->uMsg = WM_KILLFOCUS;
 					break;
-				case SDL_APP_DIDENTERFOREGROUND:
+				case SDL_EVENT_DID_ENTER_FOREGROUND:
 					msg->uMsg = WM_SETFOCUS;
 					needRecreateGl = true;
 					break;
-				case SDL_WINDOWEVENT:
-					switch (event.window.event)
-					{
-						case SDL_WINDOWEVENT_RESIZED:
-							winWidth  = event.window.data1 * dpr;
-							winHeight = event.window.data2 * dpr;
-							windowResized = true;
-							br = false;
-							break;
-					}
+				case SDL_EVENT_WINDOW_RESIZED:
+					winWidth  = event.window.data1 * dpr;
+					winHeight = event.window.data2 * dpr;
+					windowResized = true;
+					br = false;
 					break;
 				case WM_DESTROY:
 					msg->uMsg = event.type;
 					break;
-				case SDL_QUIT:
+				case SDL_EVENT_QUIT:
 					timerID = SDL_AddTimer(2500, watchdogTimer, NULL);
 					return 0;
-				case SDL_KEYDOWN:
-					if (event.key.keysym.sym == SDLK_RETURN && (event.key.keysym.mod & KMOD_LALT))
+				case SDL_EVENT_KEY_DOWN:
+					if (event.key.key == SDLK_RETURN && (event.key.mod & SDL_KMOD_LALT))
 					{
 						if (!event.key.repeat)
 						{
-							SDL_SetWindowFullscreen(sdlWin, (SDL_GetWindowFlags(sdlWin) & fullScreenFlag) ? SDL_FALSE : fullScreenFlag);
+							SDL_SetWindowFullscreen(sdlWin, !(SDL_GetWindowFlags(sdlWin) & SDL_WINDOW_FULLSCREEN));
 							/* Force window-size update — some WMs (Plasma, etc.)
 							   may not send SDL_WINDOWEVENT_RESIZED reliably after a
 							   fullscreen→windowed transition, leaving winWidth/
@@ -152,10 +148,10 @@ REALIGN STDCALL BOOL GetMessageA_wrap(MSG *msg, void *hWnd, uint32_t wMsgFilterM
 						break;
 					}
 					//no break
-				case SDL_KEYUP:
+				case SDL_EVENT_KEY_UP:
 				{
-					SDL_Scancode scancode = event.key.keysym.scancode;
-					SDL_Keycode sym = event.key.keysym.sym;
+					SDL_Scancode scancode = event.key.scancode;
+					SDL_Keycode sym = event.key.key;
 
 #ifdef __ANDROID__
 					if (sym == SDLK_AC_BACK)
@@ -259,10 +255,10 @@ REALIGN STDCALL BOOL GetMessageA_wrap(MSG *msg, void *hWnd, uint32_t wMsgFilterM
 						case SDLK_PERIOD:
 							msg->wParam = 0xBE;
 							break;
-						case SDLK_BACKQUOTE:
+						case SDLK_GRAVE:
 							msg->wParam = 0xC0;
 							break;
-						case SDLK_QUOTE:
+						case SDLK_APOSTROPHE:
 							msg->wParam = 0xDE;
 							break;
 						case SDLK_KP_ENTER:
@@ -281,9 +277,9 @@ REALIGN STDCALL BOOL GetMessageA_wrap(MSG *msg, void *hWnd, uint32_t wMsgFilterM
 
 					SDL_Event event2;
 					event2.type = WM_CHR_SDL;
-					if (event.type == SDL_KEYUP)
+					if (event.type == SDL_EVENT_KEY_UP)
 						msg->uMsg = WM_KEYUP;
-					else if (event.type == SDL_KEYDOWN)
+					else if (event.type == SDL_EVENT_KEY_DOWN)
 					{
 						msg->uMsg = WM_KEYDOWN;
 						if (isWMChar)
@@ -294,10 +290,10 @@ REALIGN STDCALL BOOL GetMessageA_wrap(MSG *msg, void *hWnd, uint32_t wMsgFilterM
 						}
 					}
 
-					if (sym >= SDLK_a && sym <= SDLK_z)
+					if (sym >= SDLK_A && sym <= SDLK_Z)
 						msg->wParam = sym & ~0x20;
 				} break;
-				case SDL_TEXTINPUT:
+				case SDL_EVENT_TEXT_INPUT:
 				{
 					msg->uMsg = WM_CHAR;
 					msg->wParam = event.text.text[0];
@@ -308,19 +304,17 @@ REALIGN STDCALL BOOL GetMessageA_wrap(MSG *msg, void *hWnd, uint32_t wMsgFilterM
 					msg->wParam = (uint32_t)event.user.data1;
 					msg->lParam = (uint32_t)event.user.data2;
 					break;
-				case SDL_FINGERDOWN:
+				case SDL_EVENT_FINGER_DOWN:
 				{
-					SDL_TouchFingerEvent *fingerEvent = ((SDL_TouchFingerEvent *)&event);
-					if (touchId == 0 && fingerEvent->pressure > 0.0f && SDL_GetTouchDeviceType(fingerEvent->touchId) == SDL_TOUCH_DEVICE_DIRECT)
+					if (touchId == 0 && event.tfinger.pressure > 0.0f && SDL_GetTouchDeviceType(event.tfinger.touchID) == SDL_TOUCH_DEVICE_DIRECT)
 					{
-						touchId = fingerEvent->touchId;
+						touchId = event.tfinger.touchID;
 						touchTimeStamp = SDL_GetTicks();
 					}
 				} break;
-				case SDL_FINGERUP:
+				case SDL_EVENT_FINGER_UP:
 				{
-					SDL_TouchFingerEvent *fingerEvent = ((SDL_TouchFingerEvent *)&event);
-					if (touchId == fingerEvent->touchId)
+					if (touchId == event.tfinger.touchID)
 					{
 						if (touchTimeStamp > 0 && tapEnterTimerId == 0 && SDL_GetTicks() - touchTimeStamp < 250)
 						{
@@ -333,16 +327,15 @@ REALIGN STDCALL BOOL GetMessageA_wrap(MSG *msg, void *hWnd, uint32_t wMsgFilterM
 						touchTimeStamp = 0;
 					}
 				} break;
-				case SDL_FINGERMOTION:
+				case SDL_EVENT_FINGER_MOTION:
 				{
-					SDL_TouchFingerEvent *fingerEvent = ((SDL_TouchFingerEvent *)&event);
-					if (touchId == fingerEvent->touchId)
+					if (touchId == event.tfinger.touchID)
 					{
-						touchDX += fingerEvent->dx;
-						touchDY += fingerEvent->dy;
+						touchDX += event.tfinger.dx;
+						touchDY += event.tfinger.dy;
 						if (touchTimeStamp > 0)
 						{
-							touchDXY += SDL_fabsf(fingerEvent->dx) + SDL_fabsf(fingerEvent->dy);
+							touchDXY += SDL_fabsf(event.tfinger.dx) + SDL_fabsf(event.tfinger.dy);
 							if (touchDXY >= 0.01f)
 							{
 								/* Don't simulate key press on finger up after small motion */
@@ -352,9 +345,9 @@ REALIGN STDCALL BOOL GetMessageA_wrap(MSG *msg, void *hWnd, uint32_t wMsgFilterM
 					}
 				} break;
 				default:
-					if (event.type >= SDL_USEREVENT)
+					if (event.type >= SDL_EVENT_USER)
 					{
-						msg->uMsg = event.type + WM_USER - SDL_USEREVENT;
+						msg->uMsg = event.type + WM_USER - SDL_EVENT_USER;
 						msg->lParam = event.user.code;
 						break;
 					}

@@ -39,8 +39,8 @@
 	#define MAYBE_STATIC static
 #endif
 
-#include <SDL2/SDL_events.h>
-#include <SDL2/SDL.h>
+#include <SDL3/SDL_events.h>
+#include <SDL3/SDL.h>
 
 #define MOUSE        0x6F1D2B60
 #define JOYSTICK     0x6F1D2B70
@@ -51,7 +51,7 @@
 #define USE_ORIGINAL_SPRING_VALUES 0
 
 static const char *g_joyPaths[2];
-static SDL_threadID g_mainThread;
+static SDL_ThreadID g_mainThread;
 static uint8_t g_buttonsPressedCount[2][32];
 
 extern SDL_Window *sdlWin;
@@ -85,17 +85,17 @@ extern int32_t joystickEscButton[2], joystickResetButton[2], joystickDPadButtons
 static void simulateKey(int32_t keycode, int32_t scancode, uint8_t pressed, uint8_t *lastPressed)
 {
 	SDL_Event event = {0};
-	event.key.keysym.sym = keycode;
-	event.key.keysym.scancode = scancode;
+	event.key.key = keycode;
+	event.key.scancode = scancode;
 	if (pressed && !*lastPressed)
 	{
-		event.type = SDL_KEYDOWN;
+		event.type = SDL_EVENT_KEY_DOWN;
 		SDL_PushEvent(&event);
 		*lastPressed = pressed;
 	}
 	else if (!pressed && *lastPressed)
 	{
-		event.type = SDL_KEYUP;
+		event.type = SDL_EVENT_KEY_UP;
 		SDL_PushEvent(&event);
 		*lastPressed = pressed;
 	}
@@ -139,7 +139,7 @@ static void maybeInitEffect(DirectInputDevice *dev, DirectInputEffect *eff)
 	else if (dev->haptic)
 	{
 		const char *effName = NULL;
-		int32_t query = SDL_HapticQuery(dev->haptic);
+		int32_t query = SDL_GetHapticFeatures(dev->haptic);
 		switch (eff->guid.a)
 		{
 			case FORCE_CONST:
@@ -189,12 +189,12 @@ static void ensureJoyOpen(DirectInputDevice *dev)
 
 	int32_t i;
 
-	if (joy && !SDL_JoystickGetAttached(joy))
+	if (joy && !SDL_JoystickConnected(joy))
 	{
 		if (dev->haptic)
 		{
 			printf("Closed haptic for joystick index: %d\n", joyIdx); fflush(stdout);
-			SDL_HapticClose(dev->haptic);
+			SDL_CloseHaptic(dev->haptic);
 			dev->haptic = NULL;
 		}
 
@@ -207,7 +207,7 @@ static void ensureJoyOpen(DirectInputDevice *dev)
 			dev->effects[i]->effect_idx = -1;
 		}
 
-		SDL_JoystickClose(joy);
+		SDL_CloseJoystick(joy);
 		dev->joy = joy = NULL;
 
 		g_joyPaths[joyIdx] = NULL;
@@ -222,10 +222,12 @@ static void ensureJoyOpen(DirectInputDevice *dev)
 		if (joyIdx == 1 && !g_joyPaths[0])
 			return; // First joystick not open - don't open second joystick
 
-		const int32_t n = SDL_NumJoysticks();
+		int32_t n;
+		SDL_JoystickID *ids = SDL_GetJoysticks(&n);
 		for (i = 0; i < n; ++i)
 		{
-			const char *name = SDL_JoystickNameForIndex(i);
+			SDL_JoystickID id = ids[i];
+			const char *name = SDL_GetJoystickNameForID(id);
 #ifdef __ANDROID__
 			if (n > 1 && name && strcmp(name, "Android Accelerometer") == 0)
 				continue;
@@ -235,23 +237,24 @@ static void ensureJoyOpen(DirectInputDevice *dev)
 #endif
 
 			const char *anotherPath = g_joyPaths[1 - joyIdx];
-			const char *path = SDL_JoystickPathForIndex(i);
-			if (anotherPath && strcmp(path, anotherPath) == 0)
+			const char *path = SDL_GetJoystickPathForID(id);
+			if (anotherPath && path && strcmp(path, anotherPath) == 0)
 				continue; //Joystick already open at another index
 
-			dev->joy = joy = SDL_JoystickOpen(i);
+			dev->joy = joy = SDL_OpenJoystick(id);
 			if (dev->joy)
 			{
 				g_joyPaths[joyIdx] = path;
-				printf("Joystick \"%s\" opened at system index: %d at index: %d at: %s\n", SDL_JoystickName(joy), i, joyIdx, path); fflush(stdout);
+				printf("Joystick \"%s\" opened at system index: %d at index: %d at: %s\n", SDL_GetJoystickName(joy), i, joyIdx, path); fflush(stdout);
 			}
 
 			break;
 		}
+		SDL_free(ids);
 		if (!joy)
 			return;
 
-		dev->haptic = SDL_HapticOpenFromJoystick(joy);
+		dev->haptic = SDL_OpenHapticFromJoystick(joy);
 		if (dev->haptic)
 		{
 			printf("Haptic opened for joystick index: %d", joyIdx);
@@ -259,17 +262,16 @@ static void ensureJoyOpen(DirectInputDevice *dev)
 		else
 		{
 			/* Try to open haptic by matching the name with joystick name */
-			const char *joyName = SDL_JoystickName(joy);
-			const int32_t n = SDL_NumHaptics();
-			for (i = 0; i < n; ++i)
+			const char *joyName = SDL_GetJoystickName(joy);
+			int32_t hn;
+			SDL_HapticID *hids = SDL_GetHaptics(&hn);
+			for (i = 0; i < hn; ++i)
 			{
-				if (SDL_HapticOpened(i) == SDL_TRUE)
-					continue;
-
-				const char *name = SDL_HapticName(i);
-				if (strcmp(name, joyName) == 0)
+				SDL_HapticID hid = hids[i];
+				const char *name = SDL_GetHapticNameForID(hid);
+				if (name && strcmp(name, joyName) == 0)
 				{
-					dev->haptic = SDL_HapticOpen(i);
+					dev->haptic = SDL_OpenHaptic(hid);
 					if (dev->haptic)
 					{
 						printf("Haptic \"%s\" opened at system index: %d for joystick index: %d", name, i, joyIdx);
@@ -277,16 +279,17 @@ static void ensureJoyOpen(DirectInputDevice *dev)
 					break;
 				}
 			}
+			SDL_free(hids);
 		}
 
 		if (dev->haptic)
 		{
-			int32_t hapticNumAxes = SDL_HapticNumAxes(dev->haptic);
+			int32_t hapticNumAxes = SDL_GetNumHapticAxes(dev->haptic);
 
 			if (hapticNumAxes == 1)
 				dev->useCartesian = true;
 #ifdef linux
-			else if (hapticNumAxes == 2 && SDL_JoystickGetType(joy) == SDL_JOYSTICK_TYPE_WHEEL)
+			else if (hapticNumAxes == 2 && SDL_GetJoystickType(joy) == SDL_JOYSTICK_TYPE_WHEEL)
 				dev->useCartesian = true; //Linux detects Logitech G29 as 2-axis haptic device
 #endif
 			else
@@ -297,12 +300,12 @@ static void ensureJoyOpen(DirectInputDevice *dev)
 
 			/* Re-apply gain */
 			if (dev->gain < 100)
-				SDL_HapticSetGain(dev->haptic, dev->gain);
+				SDL_SetHapticGain(dev->haptic, dev->gain);
 		}
-		else if (SDL_JoystickGetType(joy) == SDL_JOYSTICK_TYPE_GAMECONTROLLER)
+		else if (SDL_GetJoystickType(joy) == SDL_JOYSTICK_TYPE_GAMEPAD)
 		{
 			/* Use rumble as a fallback */
-			dev->rumble = SDL_JoystickHasRumble(joy);
+			dev->rumble = true;
 			if (dev->rumble)
 			{
 				printf("Using rumble for joystick index: %d\n", joyIdx); fflush(stdout);
@@ -328,12 +331,12 @@ static void maybeRestartEffect(DirectInputEffect *eff)
 		uint32_t gain = SDL_min(eff->gain, 100u);
 		if (gain > 0)
 		{
-			SDL_JoystickRumble(eff->joy, lr->large_magnitude * gain / 100, lr->small_magnitude * gain / 100, lr->length);
+			SDL_RumbleJoystick(eff->joy, lr->large_magnitude * gain / 100, lr->small_magnitude * gain / 100, lr->length);
 		}
 	}
 	else if (eff->haptic && eff->effect_idx >= 0)
 	{
-		SDL_HapticRunEffect(eff->haptic, eff->effect_idx, 1);
+		SDL_RunHapticEffect(eff->haptic, eff->effect_idx, 1);
 	}
 }
 static void maybeStopEffect(DirectInputEffect *eff, BOOL pause)
@@ -345,11 +348,11 @@ static void maybeStopEffect(DirectInputEffect *eff, BOOL pause)
 
 	if (eff->joy)
 	{
-		SDL_JoystickRumble(eff->joy, 0, 0, 0);
+		SDL_RumbleJoystick(eff->joy, 0, 0, 0);
 	}
 	else if (eff->haptic && eff->effect_idx >= -1)
 	{
-		SDL_HapticStopEffect(eff->haptic, eff->effect_idx);
+		SDL_StopHapticEffect(eff->haptic, eff->effect_idx);
 	}
 
 	if (!pause)
@@ -392,7 +395,7 @@ static void setEffect(DirectInputEffect *dinputEffect, const DIEFFECT *di_eff)
 							sdl_constant->level = sdl_constant->level * tmp / 90; //Reduce level if not 270 degrees
 							sdl_constant->direction.dir[0] = -1;
 						}
-						else if (SDL_HapticQuery(dinputEffect->haptic) & SDL_HAPTIC_SINE)
+						else if (SDL_GetHapticFeatures(dinputEffect->haptic) & SDL_HAPTIC_SINE)
 						{
 							/* Use sine force for 0 or 180 (can't determine the direction) */
 							SDL_HapticEffect backup = dinputEffect->effect;
@@ -494,15 +497,15 @@ static void setEffect(DirectInputEffect *dinputEffect, const DIEFFECT *di_eff)
 
 	if (dinputEffect->haptic)
 	{
-		if (dinputEffect->effect_idx >= 0 && SDL_HapticUpdateEffect(dinputEffect->haptic, dinputEffect->effect_idx, &dinputEffect->effect) != 0)
+		if (dinputEffect->effect_idx >= 0 && SDL_UpdateHapticEffect(dinputEffect->haptic, dinputEffect->effect_idx, &dinputEffect->effect) != 0)
 		{
 			/* Usually happens when we changed effect type */
-			SDL_HapticDestroyEffect(dinputEffect->haptic, dinputEffect->effect_idx);
+			SDL_DestroyHapticEffect(dinputEffect->haptic, dinputEffect->effect_idx);
 			dinputEffect->effect_idx = -1;
 		}
 		if (dinputEffect->effect_idx < 0)
 		{
-			dinputEffect->effect_idx = SDL_HapticNewEffect(dinputEffect->haptic, &dinputEffect->effect);
+			dinputEffect->effect_idx = SDL_CreateHapticEffect(dinputEffect->haptic, &dinputEffect->effect);
 			if (dinputEffect->effect_idx < 0)
 			{
 				printf("%s (effect type: 0x%.2X)\n", SDL_GetError(), dinputEffect->effect.type); fflush(stdout);
@@ -546,10 +549,10 @@ MAYBE_STATIC REALIGN STDCALL uint32_t Release(void **this)
 			free(dinputDev->effects);
 
 			if (dinputDev->haptic)
-				SDL_HapticClose(dinputDev->haptic);
+				SDL_CloseHaptic(dinputDev->haptic);
 
 			if (dinputDev->joy)
-				SDL_JoystickClose(dinputDev->joy);
+				SDL_CloseJoystick(dinputDev->joy);
 
 			g_joyPaths[joyIdx] = NULL;
 		}
@@ -622,7 +625,7 @@ MAYBE_STATIC REALIGN STDCALL uint32_t SetProperty(DirectInputDevice **this, cons
 	{
 		(*this)->gain = ((const DIPROPDWORD *)pdiph)->dwData / 100;
 		if ((*this)->haptic)
-			SDL_HapticSetGain((*this)->haptic, (*this)->gain);
+			SDL_SetHapticGain((*this)->haptic, (*this)->gain);
 	}
 	return 0;
 }
@@ -652,24 +655,24 @@ MAYBE_STATIC REALIGN STDCALL uint32_t GetDeviceState(DirectInputDevice **this, u
 
 	int32_t joyIdx = (*this)->guid.b;
 
-	int32_t numButtons = SDL_min(SDL_JoystickNumButtons(joy), 32);
-	int32_t numAxes = SDL_min(SDL_JoystickNumAxes(joy), 6);
-	int32_t numHats = SDL_JoystickNumHats(joy);
+	int32_t numButtons = SDL_min(SDL_GetNumJoystickButtons(joy), 32);
+	int32_t numAxes = SDL_min(SDL_GetNumJoystickAxes(joy), 6);
+	int32_t numHats = SDL_GetNumJoystickHats(joy);
 
 	int32_t i;
 
 	if (joystickEscButton[joyIdx] >= 0 && joystickEscButton[joyIdx] < numButtons)
 	{
-		simulateKey(SDLK_ESCAPE, SDL_SCANCODE_ESCAPE, SDL_JoystickGetButton(joy, joystickEscButton[joyIdx]), &(*this)->escPressed);
+		simulateKey(SDLK_ESCAPE, SDL_SCANCODE_ESCAPE, SDL_GetJoystickButton(joy, joystickEscButton[joyIdx]), &(*this)->escPressed);
 	}
 	if (joystickResetButton[joyIdx] >= 0 && joystickResetButton[joyIdx] < numButtons)
 	{
-		simulateKey(SDLK_F11 + joyIdx, SDL_SCANCODE_F11 + joyIdx, SDL_JoystickGetButton(joy, joystickResetButton[joyIdx]), &(*this)->resetPressed);
+		simulateKey(SDLK_F11 + joyIdx, SDL_SCANCODE_F11 + joyIdx, SDL_GetJoystickButton(joy, joystickResetButton[joyIdx]), &(*this)->resetPressed);
 	}
 	if (numHats > 0)
 	{
 		uint8_t pressed[4] = {0};
-		switch (SDL_JoystickGetHat(joy, 0))
+		switch (SDL_GetJoystickHat(joy, 0))
 		{
 			case SDL_HAT_CENTERED:
 				break;
@@ -702,7 +705,7 @@ MAYBE_STATIC REALIGN STDCALL uint32_t GetDeviceState(DirectInputDevice **this, u
 	{
 		if (joystickDPadButtons[joyIdx][i] >= 0 && joystickDPadButtons[joyIdx][i] < numButtons)
 		{
-			simulateKey(SDLK_RIGHT + i, SDL_SCANCODE_RIGHT + i, SDL_JoystickGetButton(joy, joystickDPadButtons[joyIdx][i]), &(*this)->dpadPressed[i]);
+			simulateKey(SDLK_RIGHT + i, SDL_SCANCODE_RIGHT + i, SDL_GetJoystickButton(joy, joystickDPadButtons[joyIdx][i]), &(*this)->dpadPressed[i]);
 		}
 	}
 
@@ -725,7 +728,7 @@ MAYBE_STATIC REALIGN STDCALL uint32_t GetDeviceState(DirectInputDevice **this, u
 		if (!ignore) //Skip joystick button assigned as keyboard keys
 		{
 			const uint8_t maxPressedCount = 50;
-			uint8_t pressed = SDL_JoystickGetButton(joy, i);
+			uint8_t pressed = SDL_GetJoystickButton(joy, i);
 			uint8_t *pressedCount = &g_buttonsPressedCount[joyIdx][i];
 			if (pressed)
 			{
@@ -743,7 +746,7 @@ MAYBE_STATIC REALIGN STDCALL uint32_t GetDeviceState(DirectInputDevice **this, u
 		}
 	}
 
-	const BOOL isGameThread = (g_mainThread != SDL_ThreadID());
+	const BOOL isGameThread = (g_mainThread != SDL_GetCurrentThreadID());
 	if (isGameThread || delayButtons || (numHats <= 0 && !joystickDisableAxesInMenu))
 	{
 		for (i = 0; i < numAxes; ++i)
@@ -752,7 +755,7 @@ MAYBE_STATIC REALIGN STDCALL uint32_t GetDeviceState(DirectInputDevice **this, u
 				continue;
 
 			int32_t *axis = &joyState->axes[i < 3 ? i : i + 2];
-			*axis = (uint16_t)SDL_JoystickGetAxis(joy, joystickAxes[joyIdx][i]) ^ 0x8000;
+			*axis = (uint16_t)SDL_GetJoystickAxis(joy, joystickAxes[joyIdx][i]) ^ 0x8000;
 			if (joystickAxes[joyIdx][i + 6] > 0)
 				*axis = (*axis >> 1) + 32768;
 			else if (joystickAxes[joyIdx][i + 6] < 0)
@@ -796,8 +799,8 @@ MAYBE_STATIC REALIGN STDCALL uint32_t GetDeviceData(DirectInputDevice **this, ui
 		else
 		{
 			static int32_t lastMouseButton;
-			int32_t x = 0, y = 0;
-			int32_t mouseButton = SDL_GetRelativeMouseState(&x, &y) & SDL_BUTTON_LMASK;
+			float x = 0.0f, y = 0.0f;
+			Uint32 mouseButton = SDL_GetRelativeMouseState(&x, &y) & SDL_BUTTON_LMASK;
 			if (x || y) /* Only when mouse moved */
 			{
 				SDL_GetMouseState(&x, &y);
@@ -917,7 +920,7 @@ MAYBE_STATIC REALIGN STDCALL uint32_t Poll(DirectInputDevice **this)
 {
 	/* Joystick only */
 
-	SDL_JoystickUpdate();
+	SDL_UpdateJoysticks();
 
 	ensureJoyOpen(*this);
 
@@ -1052,10 +1055,10 @@ REALIGN STDCALL uint32_t DirectInputCreateA_wrap(MAYBE_THIS void *hInstance, uin
 	dinput_game_thread = this;
 #endif
 
-	if (SDL_Init(SDL_INIT_JOYSTICK | SDL_INIT_HAPTIC) < 0)
+	if (!SDL_Init(SDL_INIT_JOYSTICK | SDL_INIT_HAPTIC))
 		fprintf(stderr, "SDL joystick and haptic init failed: %s\n", SDL_GetError());
 
-	g_mainThread = SDL_ThreadID();
+	g_mainThread = SDL_GetCurrentThreadID();
 
 	return 0;
 }

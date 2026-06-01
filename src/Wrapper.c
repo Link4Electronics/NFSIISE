@@ -2,7 +2,7 @@
 
 #include "Wrapper.h"
 #include "Version"
-#include <SDL2/SDL.h>
+#include <SDL3/SDL.h>
 #include <signal.h>
 #include <ucontext.h>
 #include <sys/stat.h>
@@ -431,8 +431,9 @@ REALIGN STDCALL void WrapperAtExit(ProcedureType proc)
 		atExitProcedures[atExitProcedureCount++] = proc;
 }
 
-uint32_t watchdogTimer(uint32_t interval, void *param)
+Uint32 watchdogTimer(void *userdata, SDL_TimerID timerID, Uint32 interval)
 {
+	(void)userdata; (void)timerID;
 	exit(0);
 }
 
@@ -455,8 +456,8 @@ BOOL useOnlyOneCPU = false;
 
 #ifndef WIN32
 char *serialPort[4] = {NULL};
-SDL_mutex *event_mutex;
-SDL_cond *event_cond;
+SDL_Mutex *event_mutex;
+SDL_Condition *event_cond;
 #endif
 void exit_func(void)
 {
@@ -494,7 +495,7 @@ void exit_func(void)
 		SDL_Delay(10);
 
 #if !defined(WIN32) && 0 // Disabled, because currently causes deadlock on Linux
-	SDL_DestroyCond(event_cond);
+	SDL_DestroyCondition(event_cond);
 	event_cond = NULL;
 	SDL_DestroyMutex(event_mutex);
 	event_mutex = NULL;
@@ -646,7 +647,7 @@ static void signal_handler(int sig)
 	if (contextError)
 	{
 #ifndef WIN32
-		SDL_SetWindowFullscreen(sdlWin, SDL_FALSE);
+		SDL_SetWindowFullscreen(sdlWin, false);
 #endif
 		SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, title, "Can't create context!", NULL);
 	}
@@ -654,14 +655,14 @@ static void signal_handler(int sig)
 	else if (shaderError)
 	{
 #ifndef WIN32
-		SDL_SetWindowFullscreen(sdlWin, SDL_FALSE);
+		SDL_SetWindowFullscreen(sdlWin, false);
 #endif
 		SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, title, "Error loading shaders, see console output!", NULL);
 	}
 	else if (framebufferError)
 	{
 #ifndef WIN32
-		SDL_SetWindowFullscreen(sdlWin, SDL_FALSE);
+		SDL_SetWindowFullscreen(sdlWin, false);
 #endif
 		SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, title, "Can't create framebuffer!", NULL);
 	}
@@ -683,7 +684,7 @@ int32_t initialWinWidth = 640, initialWinHeight = 480, winWidth, winHeight, vSyn
 BOOL joystickApplyDeadzone = false, joystickDisableAxesInMenu = false;
 int32_t joystickEscButton[2] = {-1, -1}, joystickResetButton[2] = {-1, -1}, joystickDPadButtons[2][4] = {{-1, -1, -1, -1}, {-1, -1, -1, -1}};
 BOOL linearSoundInterpolation = false, keepAspectRatio = true, linearFiltering = true;
-uint32_t fullScreenFlag = SDL_WINDOW_FULLSCREEN_DESKTOP, broadcast = 0xFFFFFFFF;
+uint32_t fullScreenFlag = SDL_WINDOW_FULLSCREEN, broadcast = 0xFFFFFFFF;
 uint16_t PORT1 = 1030, PORT2 = 1029;
 #ifndef OPENGL1X
 BOOL fixedFramebufferSize = false;
@@ -721,7 +722,7 @@ static void initializeSDL2()
 	SDL_SetHint(SDL_HINT_MOUSE_TOUCH_EVENTS, "0");
 	SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
 
-	if (SDL_Init(SDL_INIT_TIMER | SDL_INIT_AUDIO | SDL_INIT_VIDEO | SDL_INIT_EVENTS) < 0)
+	if (!SDL_Init(SDL_INIT_AUDIO | SDL_INIT_VIDEO | SDL_INIT_EVENTS))
 		fprintf(stderr, "SDL init failed: %s\n", SDL_GetError());
 }
 
@@ -739,8 +740,8 @@ void WrapperInit(void)
 #endif
 	FILE *f = NULL;
 
-	SDL_JoystickEventState(SDL_IGNORE);
-	SDL_ShowCursor(false);
+	SDL_SetJoystickEventsEnabled(false);
+	SDL_HideCursor();
 
 #ifdef __ANDROID__
 	if (!SDL_AndroidRequestPermission("android.permission.READ_EXTERNAL_STORAGE"))
@@ -826,7 +827,7 @@ void WrapperInit(void)
 
 #ifndef WIN32
 	event_mutex = SDL_CreateMutex();
-	event_cond = SDL_CreateCond();
+	event_cond = SDL_CreateCondition();
 
 	signal(SIGILL, signal_handler);
 	signal(SIGBUS, signal_handler);
@@ -944,7 +945,7 @@ void WrapperInit(void)
 			else if (!strncasecmp("LinuxCOM4=", line, 10))
 				serialPort[3] = strdup(line + 10);
 #endif
-#ifdef __ANDROID__
+#if defined(__ANDROID__) && defined(SDL_HINT_ACCELEROMETER_AS_JOYSTICK)
 			else if (!strncasecmp("AccelerometerAsJoystick=", line, 24))
 				SDL_SetHint(SDL_HINT_ACCELEROMETER_AS_JOYSTICK, line + 24);
 #endif
@@ -1048,10 +1049,10 @@ REALIGN STDCALL SDL_Window *WrapperCreateWindow(WindowProc windowProc)
 
 	checkGameDirs();
 
-	int windowFlags = SDL_WINDOW_OPENGL | SDL_WINDOW_ALLOW_HIGHDPI | (startInFullScreen ? fullScreenFlag : 0);
-	if (fullScreenFlag == SDL_WINDOW_FULLSCREEN_DESKTOP)
+	int windowFlags = SDL_WINDOW_OPENGL | SDL_WINDOW_HIGH_PIXEL_DENSITY | (startInFullScreen ? fullScreenFlag : 0);
+	if (fullScreenFlag == SDL_WINDOW_FULLSCREEN)
 		windowFlags |= SDL_WINDOW_RESIZABLE;
-	sdlWin = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, initialWinWidth, initialWinHeight, windowFlags);
+	sdlWin = SDL_CreateWindow(title, initialWinWidth, initialWinHeight, windowFlags);
 	if (!sdlWin)
 	{
 		const char errorText[] = "Cannot create window: %s\nCheck the OpenGL drivers and the game settings!";
@@ -1081,9 +1082,12 @@ REALIGN STDCALL SDL_Window *WrapperCreateWindow(WindowProc windowProc)
 			icon[j++] = palette[compressed_icon[i] & 0x0F];
 		}
 	}
-	SDL_Surface *icon_surface = SDL_CreateRGBSurfaceFrom(icon, 32, 32, 32, 128, 0x000000FF, 0x0000FF00, 0x00FF0000, 0xFF000000);
+	SDL_Surface *icon_surface = SDL_CreateSurface(32, 32, SDL_PIXELFORMAT_RGBA8888);
+	SDL_LockSurface(icon_surface);
+	memcpy(icon_surface->pixels, icon, 32 * 32 * 4);
+	SDL_UnlockSurface(icon_surface);
 	SDL_SetWindowIcon(sdlWin, icon_surface);
-	SDL_FreeSurface(icon_surface);
+	SDL_DestroySurface(icon_surface);
 
 	free(icon);
 #endif

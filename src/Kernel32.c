@@ -3,7 +3,7 @@
 #include "Kernel32.h"
 
 #include <stdio.h>
-#include <SDL2/SDL_timer.h>
+#include <SDL3/SDL_timer.h>
 #include "Cpp/ByteUtils.h"
 
 void exit_func();
@@ -220,13 +220,13 @@ REALIGN STDCALL void *FindFirstFileA_wrap(const char *fileName, WIN32_FIND_DATAA
 static uint32_t overlapped_error;
 
 extern char *serialPort[4];
-extern SDL_mutex *event_mutex;
-extern SDL_cond *event_cond;
+extern SDL_Mutex *event_mutex;
+extern SDL_Condition *event_cond;
 
 static int threadFunction(void *data)
 {
 	Thread *thread = (Thread *)data;
-	SDL_SemWait(thread->sem);
+	SDL_WaitSemaphore(thread->sem);
 	SDL_DestroySemaphore(thread->sem);
 #ifdef NFS_CPP
 	thread->function(thread->arg);
@@ -257,7 +257,7 @@ REALIGN STDCALL void *CreateThread_wrap(void *threadAttributes, uint32_t stackSi
 }
 REALIGN STDCALL uint32_t ResumeThread_wrap(Thread *thread)
 {
-	SDL_SemPost(thread->sem);
+	SDL_SignalSemaphore(thread->sem);
 	return 0;
 }
 REALIGN STDCALL BOOL SetThreadPriority_wrap(Thread *thread, int priority)
@@ -266,7 +266,7 @@ REALIGN STDCALL BOOL SetThreadPriority_wrap(Thread *thread, int priority)
 }
 REALIGN STDCALL uint32_t GetCurrentThreadId_wrap(void)
 {
-	return SDL_ThreadID();
+	return SDL_GetCurrentThreadID();
 }
 REALIGN STDCALL void *GetCurrentThread_wrap(void)
 {
@@ -360,7 +360,7 @@ REALIGN STDCALL BOOL SetEvent_wrap(Event *event)
 	{
 		SDL_LockMutex(event_mutex);
 		event->is_set = true;
-		SDL_CondBroadcast(event_cond);
+		SDL_BroadcastCondition(event_cond);
 		SDL_UnlockMutex(event_mutex);
 		return true;
 	}
@@ -380,7 +380,7 @@ REALIGN STDCALL uint32_t WaitForMultipleObjects_wrap(uint32_t count, Event *cons
 			/* events points to x86 LE memory which stores 4-byte pointers.
 			   Read each entry as little-endian uint32_t and zero-extend. */
 			const unsigned char *ev_bytes = (const unsigned char *)events;
-			Event *ev = (Event *)(uintptr_t)read32le(ev_bytes + (ptrdiff_t)i * 4);
+			Event *ev = (Event *)(uintptr_t)read32le(ev_bytes + (intptr_t)i * 4);
 			if (ev->is_set)
 			{
 				if (ret == WAIT_TIMEOUT)
@@ -400,11 +400,7 @@ REALIGN STDCALL uint32_t WaitForMultipleObjects_wrap(uint32_t count, Event *cons
 		}
 		if (ret != WAIT_TIMEOUT || !milliseconds)
 			break;
-		if (SDL_CondWait(event_cond, event_mutex) == -1) //no timeout, because milliseconds will be always -1 here
-		{
-			ret = -1;
-			break;
-		}
+		SDL_WaitCondition(event_cond, event_mutex);
 	}
 	SDL_UnlockMutex(event_mutex);
 	return ret;

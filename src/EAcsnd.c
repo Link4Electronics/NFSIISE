@@ -27,58 +27,47 @@ static void (REGPARM *getSamples)(void *samples, uint32_t num_samples_per_chn);
 typedef void (*FadeInOut)(MAYBE_THIS_SINGLE);
 static FadeInOut fadeInOut;
 
-#include <SDL2/SDL_audio.h>
+#include <SDL3/SDL_audio.h>
 
 #define CHN_CNT 2
 
-static SDL_AudioDeviceID audioDevice;
+static SDL_AudioStream *audioStream;
 static BOOL unPaused, canGetSamples;
 static uint32_t buffer_pos;
 static uint8_t *buffer;
 
-static void audioCallback(void *userdata, uint8_t *stream, int32_t len)
+static void SDLCALL sdl3_audio_callback(void *userdata, SDL_AudioStream *stream, int additional_amount, int total_amount)
 {
-	if (!buffer)
+	while (additional_amount > 0)
 	{
-		int32_t i;
-		for (i = 0; i < len; i += 256 * CHN_CNT * sizeof(int16_t))
-			getSamplesFunc(stream + i, 256);
-	}
-	else
-	{
-		while (buffer_pos < len)
+		int chunk = 256 * CHN_CNT * (int)sizeof(int16_t);
+		if (chunk > additional_amount) chunk = additional_amount;
+
+		if (!linearSoundInterpolation)
 		{
-			getSamplesFunc(buffer + buffer_pos, 256);
-			buffer_pos += 256 * CHN_CNT * sizeof(int16_t);
+			getSamplesFunc(buffer, 256);
+			SDL_PutAudioStreamData(stream, buffer, chunk);
 		}
-		memcpy(stream, buffer, len);
-		memcpy(buffer, buffer + len, buffer_pos -= len);
-	}
-}
-static void audioCallbackInterp(void *userdata, uint8_t *stream, int32_t len)
-{
-	int16_t samples[256 * CHN_CNT];
-	int16_t *buffer_16b;
-	uint32_t i, c;
-	while (buffer_pos < len)
-	{
-		buffer_16b = (int16_t *)(buffer + buffer_pos);
-		getSamplesFunc(samples, 256);
-		for (i = 0; i < (256 - 1) * CHN_CNT; i += CHN_CNT)
+		else
 		{
-			for (c = 0; c < CHN_CNT; ++c)
+			int16_t *raw = (int16_t *)buffer;
+			int16_t *out = (int16_t *)(buffer + 512 * CHN_CNT * (int)sizeof(int16_t));
+			uint32_t i, c;
+			getSamplesFunc(raw, 256);
+			for (i = 0; i < (256 - 1) * CHN_CNT; i += CHN_CNT)
 			{
-				buffer_16b[c] = samples[i + c];
-				buffer_16b[c + CHN_CNT] = (samples[i + c] + samples[i + c + CHN_CNT]) >> 1;
+				for (c = 0; c < CHN_CNT; ++c)
+				{
+					out[i + c] = raw[i + c];
+					out[i + c + CHN_CNT] = (raw[i + c] + raw[i + c + CHN_CNT]) >> 1;
+				}
 			}
-			buffer_16b += CHN_CNT << 1;
+			for (c = 0; c < CHN_CNT; ++c)
+				out[i + c] = out[i + c + CHN_CNT] = raw[i + c];
+			SDL_PutAudioStreamData(stream, out, 512 * CHN_CNT * (int)sizeof(int16_t));
 		}
-		for (c = 0; c < CHN_CNT; ++c)
-			buffer_16b[c] = buffer_16b[c + CHN_CNT] = samples[i + c];
-		buffer_pos += 512 * CHN_CNT * sizeof(int16_t);
+		additional_amount -= chunk;
 	}
-	memcpy(stream, buffer, len);
-	memcpy(buffer, buffer + len, buffer_pos -= len);
 }
 
 /**/
@@ -118,36 +107,26 @@ REALIGN REGPARM uint32_t iSNDdirectstart_(uint32_t arg1, void *hWnd)
 
 	SDL_AudioSpec audioSpecIn =
 	{
-		linearSoundInterpolation ? 44100 : 22050,
-		AUDIO_S16,
-		CHN_CNT,
-		0,
-		1024,
-		0,
-		0,
-		linearSoundInterpolation ? audioCallbackInterp : audioCallback,
-		NULL
+		.format = SDL_AUDIO_S16,
+		.channels = CHN_CNT,
+		.freq = linearSoundInterpolation ? 44100 : 22050
 	};
-	SDL_AudioSpec audioSpecOut;
-	audioDevice = SDL_OpenAudioDevice(NULL, 0, &audioSpecIn, &audioSpecOut, 0);
-	if (!audioDevice)
+	audioStream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &audioSpecIn, sdl3_audio_callback, NULL);
+	if (!audioStream)
+	{
 #if defined(HOST_64BIT)
 		buffer = (uint8_t *)malloc32(256 * CHN_CNT * sizeof(int16_t));
 #else
 		buffer = (uint8_t *)malloc(256 * CHN_CNT * sizeof(int16_t));
 #endif
+	}
 	else
 	{
-		uint32_t bufferSize = (audioSpecOut.samples + 255) & ~255; //Aligned to 256
+		uint32_t buf_elements = linearSoundInterpolation ? 1024 : 512;
 #if defined(HOST_64BIT)
-		bufferSize += 256;
-		buffer = (uint8_t *)malloc32(bufferSize * CHN_CNT * sizeof(int16_t));
+		buffer = (uint8_t *)malloc32(buf_elements * CHN_CNT * sizeof(int16_t));
 #else
-		if (linearSoundInterpolation || bufferSize != audioSpecOut.samples)
-		{
-			bufferSize += linearSoundInterpolation ? 512 : 256;
-			buffer = (uint8_t *)malloc(bufferSize * CHN_CNT * sizeof(int16_t));
-		}
+		buffer = (uint8_t *)malloc(buf_elements * CHN_CNT * sizeof(int16_t));
 #endif
 	}
 	canGetSamples = true;
@@ -157,9 +136,9 @@ REALIGN void iSNDdirectserve_(MAYBE_THIS_SINGLE)
 {
 	if (canGetSamples)
 	{
-		if (!unPaused && audioDevice)
+		if (!unPaused && audioStream)
 		{
-			SDL_PauseAudioDevice(audioDevice, 0);
+			SDL_ResumeAudioStreamDevice(audioStream);
 			unPaused = true;
 		}
 #ifdef NFS_CPP
@@ -167,18 +146,18 @@ REALIGN void iSNDdirectserve_(MAYBE_THIS_SINGLE)
 #else
 		fadeInOut();
 #endif
-		if (!audioDevice)
+		if (!audioStream)
 			getSamplesFunc(buffer, 256);
 	}
 }
 REALIGN uint32_t iSNDdirectstop_(void)
 {
 	canGetSamples = false;
-	if (audioDevice)
+	if (audioStream)
 	{
-		SDL_CloseAudioDevice(audioDevice);
+		SDL_DestroyAudioStream(audioStream);
 		unPaused = false;
-		audioDevice = 0;
+		audioStream = NULL;
 	}
 	buffer_pos = 0;
 #if defined(HOST_64BIT)

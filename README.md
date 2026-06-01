@@ -7,6 +7,7 @@ Cross-platform wrapper for the Need For Speed™ II SE game with 3D acceleration
 - **Big-endian** support on Linux (still WIP)
 - **x86_64** support for Linux
 - **ARM64** (AArch64) support for Linux
+- **SDL3** port
 
 ## OpenGL
 
@@ -21,7 +22,7 @@ Cross-platform wrapper for the Need For Speed™ II SE game with 3D acceleration
 ### Requirements
 
 * C++14 compiler (Clang or GCC)
-* SDL2 development libraries
+* SDL3 development libraries
 * OpenGL development libraries
 * (optional) Yasm assembler, for x86 32-bit assembly build (use -DUSE_ASM=ON to compile)
 
@@ -72,7 +73,7 @@ On Debian/Ubuntu, install 32-bit dependencies first:
 ```sh
 dpkg --add-architecture i386
 apt-get update
-apt-get install libsdl2-dev:i386 gcc-multilib yasm
+apt-get install libsdl3-dev:i386 gcc-multilib yasm
 ```
 
 ### Windows cross-compilation (MinGW)
@@ -110,12 +111,12 @@ cmake .. -DCMAKE_TOOLCHAIN_FILE=/path/to/mingw-toolchain.cmake -DCMAKE_BUILD_TYP
 
 ## Android
 
-* Install SDK and NDK for chosen SDL2 version,
+* Install SDK and NDK for chosen SDL3 version,
 * Set environment variables: `ANDROID_HOME` and `ANDROID_NDK_HOME`,
-* Download SDL2 source code and unpack it,
-* Create a symlink to the unpacked `SDL2-*` directory at `src/Android/app/jni/SDL`:
+* Download SDL3 source code and unpack it,
+* Create a symlink to the unpacked `SDL3-*` directory at `src/Android/app/jni/SDL`:
   ```sh
-  ln -s /path/to/SDL2-* src/Android/app/jni/SDL
+  ln -s /path/to/SDL3-* src/Android/app/jni/SDL
   ```
 * Build with Gradle from `src/Android/`:
   ```sh

@@ -157,24 +157,24 @@ target_link_options(nfs2se PRIVATE
 
 # Dependencies
 if(MINGW OR CMAKE_SYSTEM_NAME STREQUAL "Windows")
-  find_package(SDL2 REQUIRED)
+  find_package(SDL3 REQUIRED)
   target_link_libraries(nfs2se PRIVATE
-    SDL2::SDL2
+    SDL3::SDL3
     ${GL_LIBS}
     ${WIN_LIBS}
   )
 elseif(APPLE)
-  find_package(SDL2 REQUIRED)
+  find_package(SDL3 REQUIRED)
   target_link_libraries(nfs2se PRIVATE
-    SDL2::SDL2
+    SDL3::SDL3
     "-framework OpenGL"
     ${WIN_LIBS}
   )
 else()
-  find_package(SDL2 REQUIRED)
+  find_package(SDL3 REQUIRED)
   find_package(OpenGL REQUIRED)
   target_link_libraries(nfs2se PRIVATE
-    SDL2::SDL2
+    SDL3::SDL3
     ${GL_LIBS}
     m
     ${WIN_LIBS}

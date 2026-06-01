@@ -17,7 +17,7 @@ static inline void handleDpr()
 	extern float dpr;
 	SDL_GetWindowSize(sdlWin, &winWidth, &winHeight);
 	int w = winWidth, h = winHeight;
-	SDL_GL_GetDrawableSize(sdlWin, &w, &h);
+	SDL_GetWindowSizeInPixels(sdlWin, &w, &h);
 	dpr = ((float)w / (float)winWidth + (float)h / (float)winHeight) / 2.0f;
 	winWidth  *= dpr;
 	winHeight *= dpr;

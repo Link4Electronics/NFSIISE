@@ -1,6 +1,6 @@
 # Project Context
 
-NFSIISE — Need for Speed II SE emulator. Reimplements Win32/x86 APIs on top of SDL2.
+NFSIISE — Need for Speed II SE emulator. Reimplements Win32/x86 APIs on top of SDL3.
 Targets x86_64, PPC64 big-endian, PPC64LE, and ARM64 (aarch64).
 
 ## Layout (all platforms with `-no-pie`)
@@ -235,6 +235,14 @@ Sizes are now computed as `addrs[i+1] - addrs[i]` for all but the last entry (1 
 
 The non-overlapping identity pool chunks fixed a SECOND crash vector: `dword_4EB57C` now contains a valid pool address (e.g. `0x4037afb8`) instead of a BSS-range address (`0x01a9ade0`). The surface pixel buffer now points to the game's actual texture data in the pool, not to the ARM64 binary's own BSS variables.
 
+### Fixed: SDL3 audio callback SIGSEGV (stack buffer in high addresses)
+
+**Crash:** `sdl3_audio_callback` at `EAcsnd.c:48` — `getSamplesFunc(tmp, ...)` called with `tmp` on the native stack (`0x7fff...`). The 32-bit game code received the truncated address (e.g. `0x9d7f9440`) which was NOT in the pool's identity-mapped range, causing SIGSEGV on write.
+
+**Root cause:** The SDL3 audio stream callback `sdl3_audio_callback` allocated `tmp`, `samples[]`, and `interp[]` as stack-local arrays. In SDL2, the `audioCallback` received `stream` from SDL (a buffer in low memory), but in SDL3 we switched to `SDL_PutAudioStreamData` and used stack buffers instead. When `getSamplesFunc` (which calls into 32-bit game code via `wrap_regparm2`) tried to write to these buffers, the 32-bit truncated addresses fell outside the pool range.
+
+**Fix (`EAcsnd.c`):** The callback now uses `buffer` (pool-allocated via `malloc32`, in low 4GB) for all `getSamplesFunc` calls. The interpolated path uses the first 1024 bytes of `buffer` for raw input samples and offset 2048 for the interpolated output. Buffer allocation was increased from 2048 bytes to 4096 bytes (non-interpolated) / 8192 bytes (interpolated) to accommodate both input and output.
+
 ### Remaining issue: game spins on LeaveCriticalSection_wrap
 
 After the crash fixes, the game reaches the render loop (`__4248D0: entry` fires with pool addresses) but appears to spin on `LeaveCriticalSection_wrap(0x40d01478)` in a tight loop. This may indicate a missing audio/display sync or a different blocking path. The game runs without crashing but also without progressing past the spin.
@@ -254,6 +262,93 @@ All other debug prints have been removed for production cleanliness.
 3. The game binary is native (not x86 emulated).  The "emulator" reimplements
    Win32 APIs natively and uses a data-driven approach to load x86 layout
    constants.
+
+## SDL2 → SDL3 migration (May 2026)
+
+All source files ported from SDL2 to SDL3.  Builds cleanly with zero warnings.
+
+### Porting summary
+- `CMakeLists.txt`: `find_package(SDL2)` → `find_package(SDL3)`, `SDL2::SDL2` → `SDL3::SDL3`
+- All `#include <SDL2/...>` → `#include <SDL3/...>`
+
+### API changes applied
+
+| SDL2 | SDL3 |
+|---|---|
+| `SDL_CreateWindow(title, x, y, w, h, flags)` | `SDL_CreateWindow(title, w, h, flags)` |
+| `SDL_WINDOW_ALLOW_HIGHDPI` | `SDL_WINDOW_HIGH_PIXEL_DENSITY` |
+| `SDL_CreateRGBSurfaceFrom(…, masks)` | `SDL_CreateSurfaceFrom(w, h, pixel_format, pixels, pitch)` |
+| `SDL_FreeSurface(…, 1)` | `SDL_DestroySurface(…)` |
+| `SDL_ShowCursor(false)` | `SDL_HideCursor()` |
+| `SDL_JoystickEventState(SDL_IGNORE)` | `SDL_SetJoystickEventsEnabled(false)` |
+| `SDL_UpdateWindowSurface()` | `SDL_UpdateWindowSurface()` (same) |
+| `SDL_Cond *` / `SDL_CreateCond` / `SDL_DestroyCond` | `SDL_Condition *` / `SDL_CreateCondition` / `SDL_DestroyCondition` |
+| `SDL_CondWait(cond, mutex)` | `SDL_WaitCondition(cond, mutex)` (returns `void`) |
+| `SDL_CondBroadcast(cond)` | `SDL_BroadcastCondition(cond)` |
+| `SDL_SemWait(sem)` | `SDL_WaitSemaphore(sem)` (returns `bool`) |
+| `SDL_SemPost(sem)` | `SDL_SignalSemaphore(sem)` |
+| `SDL_sem *` | `SDL_Semaphore *` |
+| `SDL_mutex *` | `SDL_Mutex *` |
+| `SDL_ThreadID()` (function) | `SDL_GetCurrentThreadID()` |
+| `Uint32 cb(void*, Uint8*, int32_t)` (timer) | `Uint32 cb(void*, SDL_TimerID, Uint32)` |
+| `SDL_WINDOW_FULLSCREEN_DESKTOP` | `SDL_WINDOW_FULLSCREEN` (always desktop) |
+| `SDL_SetWindowFullscreen(win, SDL_FALSE)` | `SDL_SetWindowFullscreen(win, false)` |
+| `SDL_HINT_ACCELEROMETER_AS_JOYSTICK` | removed — guard with `#ifdef` |
+| `SDL_KEYDOWN` / `SDL_KEYUP` | `SDL_EVENT_KEY_DOWN` / `SDL_EVENT_KEY_UP` |
+| `SDL_QUIT` | `SDL_EVENT_QUIT` |
+| `SDL_TEXTINPUT` | `SDL_EVENT_TEXT_INPUT` |
+| `SDL_WINDOWEVENT` | `SDL_EVENT_WINDOW_RESIZED` |
+| `SDL_APP_WILLENTERBACKGROUND` | `SDL_EVENT_WILL_ENTER_BACKGROUND` |
+| `SDL_APP_DIDENTERFOREGROUND` | `SDL_EVENT_DID_ENTER_FOREGROUND` |
+| `SDL_FINGERDOWN/UP/MOTION` | `SDL_EVENT_FINGER_DOWN/UP/MOTION` |
+| `SDL_USEREVENT` | `SDL_EVENT_USER` |
+| `event.key.keysym.sym` → `event.key.key` | flattened struct; `mod` directly in `event.key.mod` |
+| `SDL_TouchFingerEvent.touchId` | `SDL_TouchFingerEvent.touchID` |
+| `SDLK_BACKQUOTE` (0x60) | `SDLK_GRAVE` (0x60) |
+| `SDLK_QUOTE` (0x27) | `SDLK_APOSTROPHE` (0x27) |
+| `SDLK_a`–`SDLK_z` (lowercase) | `SDLK_A`–`SDLK_Z` (always lowercase 0x61–0x7A) |
+| `SDL_NumJoysticks()` | `SDL_GetJoysticks(int *count)` → returns `SDL_JoystickID *` |
+| `SDL_JoystickOpen(index)` | `SDL_OpenJoystick(SDL_JoystickID)` |
+| `SDL_JoystickNameForIndex(i)` | `SDL_GetJoystickNameForID(id)` |
+| `SDL_JoystickPathForIndex(i)` | `SDL_GetJoystickPathForID(id)` |
+| `SDL_JoystickName(joy)` | `SDL_GetJoystickName(joy)` |
+| `SDL_JoystickGetAttached` | `SDL_JoystickConnected` |
+| `SDL_JoystickUpdate()` | `SDL_UpdateJoysticks()` |
+| `SDL_NumHaptics()` | `SDL_GetHaptics(int *count)` → returns `SDL_HapticID *` |
+| `SDL_HapticOpen(index)` | `SDL_OpenHaptic(SDL_HapticID)` |
+| `SDL_HapticName(i)` | `SDL_GetHapticNameForID(id)` |
+| `SDL_HapticOpened(i)` | removed (skip check in SDL3) |
+| `SDL_HapticOpenFromJoystick` | `SDL_OpenHapticFromJoystick` |
+| `SDL_HapticClose` | `SDL_CloseHaptic` |
+| `SDL_JoystickClose` | `SDL_CloseJoystick` |
+| `SDL_HapticQuery` | `SDL_GetHapticFeatures` |
+| `SDL_HapticNumAxes` | `SDL_GetNumHapticAxes` |
+| `SDL_HapticRunEffect` | `SDL_RunHapticEffect` |
+| `SDL_HapticStopEffect` | `SDL_StopHapticEffect` |
+| `SDL_HapticUpdateEffect` | `SDL_UpdateHapticEffect` |
+| `SDL_HapticDestroyEffect` | `SDL_DestroyHapticEffect` |
+| `SDL_HapticNewEffect` | `SDL_CreateHapticEffect` |
+| `SDL_HapticSetGain` | `SDL_SetHapticGain` |
+| `SDL_JoystickRumble` | `SDL_RumbleJoystick` |
+| `SDL_JoystickHasRumble` | removed (assume true for gamepads) |
+| `SDL_JOYSTICK_TYPE_GAMECONTROLLER` | `SDL_JOYSTICK_TYPE_GAMEPAD` |
+| `SDL_JoystickNumButtons` | `SDL_GetNumJoystickButtons` |
+| `SDL_JoystickNumAxes` | `SDL_GetNumJoystickAxes` |
+| `SDL_JoystickNumHats` | `SDL_GetNumJoystickHats` |
+| `SDL_JoystickGetButton` | `SDL_GetJoystickButton` |
+| `SDL_JoystickGetHat` | `SDL_GetJoystickHat` |
+| `SDL_JoystickGetAxis` | `SDL_GetJoystickAxis` |
+| `SDL_JoystickGetType` | `SDL_GetJoystickType` |
+| `SDL_GetRelativeMouseState(int*dx, int*dy)` | `SDL_GetRelativeMouseState(float*dx, float*dy)` |
+| `SDL_GetMouseState(int*x, int*y)` | `SDL_GetMouseState(float*x, float*y)` |
+| `SDL_INIT_TIMER` | removed (timer always available) |
+| `AUDIO_S16` | `SDL_AUDIO_S16` |
+| `SDL_OpenAudioDevice(NULL,0,&specIn,&specOut,0)` | `SDL_OpenAudioDeviceStream(devid, &spec, callback, NULL)` |
+| `SDL_PauseAudioDevice(dev, 0)` | `SDL_ResumeAudioStreamDevice(stream)` |
+| `SDL_CloseAudioDevice(dev)` | `SDL_DestroyAudioStream(stream)` |
+| `SDL_AudioSpec` with callback/samples/silence | 3 fields: `.format`, `.channels`, `.freq` |
+| `SDL_GL_DeleteContext` | `SDL_GL_DestroyContext` |
+| `SDL_GL_GetDrawableSize` | `SDL_GetWindowSizeInPixels` |
 
 ## Key files
 - `src/Timer.c` — PPC64 BE timer thread fix

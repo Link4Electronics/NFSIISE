@@ -8,13 +8,13 @@ extern void *malloc32(size_t);
 extern void free32(void *);
 #endif
 
-#include <SDL2/SDL_stdinc.h>
-#include <SDL2/SDL_video.h>
+#include <SDL3/SDL_stdinc.h>
+#include <SDL3/SDL_video.h>
 
 #ifdef GLES2
-# include <SDL2/SDL_opengles2.h>
+# include <SDL3/SDL_opengles2.h>
 #else
-# include <SDL2/SDL_opengl.h>
+# include <SDL3/SDL_opengl.h>
 static PFNGLGETSHADERIVPROC glGetShaderiv;
 static PFNGLGETPROGRAMIVPROC glGetProgramiv;
 static PFNGLGETSHADERINFOLOGPROC glGetShaderInfoLog;
@@ -641,7 +641,7 @@ static void destroyContext()
 	glDeleteShader(g_fShaderDisp);
 	glDeleteShader(g_vShaderDisp);
 
-	SDL_GL_DeleteContext(g_glCtx);
+	SDL_GL_DestroyContext(g_glCtx);
 	g_glCtx = NULL;
 
 	g_trianglesCount = 0;

@@ -8,8 +8,8 @@
 #ifdef WIN32
 	#include <windows.h>
 #else
-	#include <SDL2/SDL_thread.h>
-	#include <SDL2/SDL_mutex.h>
+	#include <SDL3/SDL_thread.h>
+	#include <SDL3/SDL_mutex.h>
 
 	#include <dirent.h>
 
@@ -57,7 +57,7 @@
 		union
 		{
 			uint32_t storage[2];
-			SDL_mutex *mutex;
+			SDL_Mutex *mutex;
 		} m;
 		uint32_t reserved4;
 	} CRITICAL_SECTION;
@@ -119,7 +119,7 @@
 #else
 		int (*threadParameter)();
 #endif
-		SDL_sem *sem;
+		SDL_Semaphore *sem;
 	} Thread;
 	typedef struct
 	{
@@ -130,7 +130,7 @@
 		uint32_t toRead, readSoFar;
 		uint8_t *asyncReadBuffer;
 		OVERLAPPED *readOverlapped;
-		SDL_mutex *mutex;
+		SDL_Mutex *mutex;
 		uint32_t us_timeout;
 	} File;
 	typedef struct
