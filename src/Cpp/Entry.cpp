@@ -34,6 +34,29 @@ extern "C" void nfs2seEntrypoint()
 	   byte_512ECC stays 0 (BSS), causing the game to look for DCT movies,
 	   fail to find them (wrong base path), and exit with an error. */
 	Application::write8((void *)byte_512ECC, 1);
+
+	/* Pre-initialise the allocator's free list head (dword_563F04[0]).
+	   _sub_49C948 (heap init) calls _sub_48438C which pops free entries
+	   from dword_563F04 to set up allocator buckets at dword_563D80.
+	   On PPC64 the BSS is zero, so dword_563F04 is NULL and _sub_48438C
+	   crashes immediately.  We allocate two free entries from the pool:
+	   one for the "mb_ram" bucket (type 0, idx 0) and one for the
+	   "mb_vmm" bucket (type 0x300, idx 3).  Each entry must be at
+	   least 0x28 bytes because _sub_48438C writes to offsets 0x00,
+	   0x10, 0x14, 0x18, 0x20, 0x24. */
+	{
+		/* Allocate from pool (persists after nfs2seEntrypoint returns) */
+		uint8_t *fe = (uint8_t *)malloc32(0x80);
+		if (fe) {
+			uintptr_t fe0 = (uintptr_t)fe;
+			uintptr_t fe1 = fe0 + 0x40;
+			/* link first → second */
+			Application::write32((void *)(fe0 + 0x20), (uint32_t)fe1);
+			Application::write32((void *)(fe1 + 0x20), 0);
+			/* store the head of the free list into dword_563F04[0] */
+			Application::write32((void *)&_bss.dword_563F04, (uint32_t)fe0);
+		}
+	}
 #endif
 
 #if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)

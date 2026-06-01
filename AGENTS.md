@@ -606,7 +606,84 @@ FOUND" → `ExitProcess` → triggers the allocator crash during cleanup.
 before game start, matching x86_64 behavior.  Movie init is skipped, no
 file access attempted, game proceeds to main menu.
 
+### Fixed: `_strcmp_` null-guard (`Methods_10.cpp:1399-1414`)
+
+Returns -1 (not equal) instead of crashing when either string pointer is null.
+Protects all callers from null config fields that the PPC64 config parser reads
+as 0 (BSS default).
+
+### Fixed: `_sub_41B710` null base pointer (`Methods_02.cpp:8321`)
+
+Added PPC64-only `test(eax, eax)/jz/return 0` guard when `dword_4D4AE0` is null.
+The file-load chain returns 0 on PPC64, so `_sub_41B710` was computing
+`dword_4D4AE0[eax]` at a null-pointer offset → SIGSEGV.
+
+### Fixed: Hash-table allocator fallback (`Methods_06.cpp:18898-18900`)
+
+On PPC64, replaces `_sub_484498()` call in `_sub_45AC50` with
+`calloc_wrap(1, esi)` so the file-handle hash table (0x800 bytes) is allocated
+via `malloc32` instead of the broken internal heap.  The hash table must
+succeed for `_sub_486F40` → `_sub_487668` → `_sub_45A560` to create filename
+entries.
+
+### Fixed: Free-list pre-init for BSS allocator (`Entry.cpp`)
+
+**Problem:** `_sub_49C948` (heap init, called from config parser) calls
+`_sub_48438C` which pops free entries from `dword_563F04`.  On PPC64 the BSS is
+all zeros, so `dword_563F04 == 0` → `read32(0+0x20)` → SIGSEGV immediately.
+Without this init, no allocator buckets are created and all file-data
+allocation from `_sub_484510` fails.
+
+**Fix (`Entry.cpp`):** PPC64-only `#if defined(__powerpc64__)` — pre-allocate two
+0x40-byte free entries from the pool via `malloc32(0x80)`, chain them via the
+link field at offset `+0x20`, and store the head in `dword_563F04[0]`.
+
+The two entries match the two `_sub_48438C` calls in `_sub_49C948`:
+- First call: pops entry[0], sets up the "mb_ram" allocator bucket (type 0, idx 0)
+- Second call: pops entry[1], sets up the "mb_vmm" allocator bucket (type 0x300, idx 3)
+
+After this, `_sub_484510` finds initialized bucket structs at `dword_563D80[0]`
+and `dword_563D80[3]` and can sub-allocate file data buffers from the pool
+ranges established by `_sub_48438C`.
+
+### Summary of all PPC64 fixes (June 2026)
+
+| # | Fix | File | Prevents |
+|---|-----|------|----------|
+| 1 | `push32` revert `translate_host_to_x86` → `(int32_t)(intptr_t)` | Application.h:317 | Wrong x86 VAs on ARM64/PPC64 |
+| 2 | `_sub_4A5124` skip `dword_59C614` gating | Methods_13.cpp:7828-7835 | Allocator early-return |
+| 3 | `_sub_4A5068` skip `call(to32i(dword_59C614))` | Methods_13.cpp:7768-7773 | Deadlock (event never signaled) |
+| 4 | `_sub_4643B0` null guard after `_sub_486F40` | Methods_07.cpp:6155-6171 | Config parser crash |
+| 5 | `_sub_49E448` skip `_sub_49E3E0(0x1040)` | Methods_13.cpp:9512-9519 | Allocator crash (SIGSEGV @ -3) |
+| 6 | `WaitForMultipleObjects_wrap` null guard | Kernel32.c:376 | Audio thread SIGSEGV |
+| 7 | `GetDeviceData` aligned-safe path | DInput.c:763-815 | `dcbz` alignment fault |
+| 8 | `_strcmp_` null-guard | Methods_10.cpp:1399-1414 | Crash on null config strings |
+| 9 | `_sub_41B710` null pointer guard | Methods_02.cpp:8321 | Crash in file-load chain |
+| 10 | Hash-table alloc `calloc_wrap` fallback | Methods_06.cpp:18898-18900 | Hash table creation failure |
+| 11 | Free-list pre-init `dword_563F04` | Entry.cpp | BSS allocator init crash |
+| 12 | `byte_512ECC = 1` skip movie init | Entry.cpp:29-36 | "MOVIE FILE NOT FOUND" |
+| 13 | Config parser re-enabled | Methods_04.cpp:1356 | BSS fields stay default |
+| 14 | Byte-order initializer swap | SwapInit.h | TLS size 0xF4000000 overflow |
+
+### Known structural issue: BSS fields that should be DATA
+
+`dword_563F04` (allocator free-list head), `dword_563D84` (allocator bucket
+array `dword_563D80`'s sibling), and `dword_563D80` itself are in **BSS**
+(zero-initialised) on all platforms.  In the original x86 binary these were
+**DATA** (initialised by the PE loader from the `.data` section).  The
+transpiler placed them in BSS because they live past the x86 BSS boundary
+(0x4E5010).
+
+On x86_64 the pool identity-mapping at the original x86 addresses means BSS
+happens to alias the correct pool addresses, so the values "work".  On PPC64
+and ARM64 the BSS is truly zero, hitting the crash chain described above.
+
+**Long-term fix:** Move these fields into `DataLayout` (DATA section) with
+proper initialisers.  This is deferred because it requires regenerating the
+transpiled struct layout — a session for another day.
+
 ### Next steps
-1. Test on PPC64BE — both the allocator crash fix and the movie error fix should allow the game to boot to the main menu.
-2. Render loop and audio may have additional endianness bugs.
-3. If gameplay works, begin testing car selection, track loading, and physics for endian-breakage.
+1. **This session:** Focus on making PPC64BE work with the current BSS-initialisation approach (free-list pre-init, calloc hash table, config parser fixes).
+2. Test on PPC64BE — the free-list pre-init + calloc hash table should let the full file-loading chain (`_sub_486F40` → `_sub_487668` → `_sub_45AC50` → `_sub_484510`) work, enabling config parsing, file loading, and game boot to main menu.
+3. Render loop and audio may have additional endianness bugs.
+4. If gameplay works, begin testing car selection, track loading, and physics for endian-breakage.

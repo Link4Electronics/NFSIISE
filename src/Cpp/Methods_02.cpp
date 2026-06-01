@@ -8318,6 +8318,13 @@ Fn(void) Game::_sub_41B710()
 	sub(eax, edx);
 	edx = (int32_t)(intptr_t)(eax*4+0); //lea
 	eax = to32i(dword_4D4AE0); //mov
+	test(eax, eax);
+	if (jz())
+	{
+		pop32(edx);
+		xor_(eax, eax);
+		return;
+	}
 	add(eax, to32i(edx+eax+8));
 	pop32(edx);
 }

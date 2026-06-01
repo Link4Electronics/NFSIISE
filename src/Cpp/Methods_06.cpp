@@ -18895,9 +18895,21 @@ loc_45AC81:
 	eax = (int32_t)(intptr_t)aFilehandles; //mov
 	edx = esi; //mov
 	to32i(dword_4DB1DC) = edi; //mov
+#if defined(__powerpc64__) || defined(__PPC64__)
+	/* PPC64: _sub_484498 (internal heap allocator) returns 0 because
+	   the BSS allocator structures (dword_563D80/563D84) are never
+	   initialized (the x86 startup code that sets them up doesn't
+	   work on PPC64).  Use calloc_wrap instead — it uses malloc32
+	   which allocates from the pool via MAP_FIXED and works on all
+	   platforms. */
+	eax = calloc_wrap(1, esi);
+	to32i(dword_4D6A60) = eax; //mov
+	to32i(dword_4D6A5C) = ecx; //mov — ecx still = 0x40
+#else
 	esp -= 4; _sub_484498(); esp += 4; //call
 	to32i(dword_4D6A60) = eax; //mov
 	to32i(dword_4D6A5C) = ecx; //mov
+#endif
 	test(eax, eax);
 	if (jnz())
 		goto loc_45ACD8;
