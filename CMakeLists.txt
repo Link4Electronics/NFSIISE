@@ -171,14 +171,16 @@ elseif(APPLE)
     ${WIN_LIBS}
   )
 else()
-  find_package(SDL3 REQUIRED)
+  find_package(SDL3 QUIET)
+  if(NOT SDL3_FOUND)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(SDL3 REQUIRED IMPORTED_TARGET sdl3)
+    set(SDL3_LIB PkgConfig::SDL3)
+  else()
+    set(SDL3_LIB SDL3::SDL3)
+  endif()
   find_package(OpenGL REQUIRED)
-  target_link_libraries(nfs2se PRIVATE
-    SDL3::SDL3
-    ${GL_LIBS}
-    m
-    ${WIN_LIBS}
-  )
+  target_link_libraries(nfs2se PRIVATE ${SDL3_LIB} ${GL_LIBS} m ${WIN_LIBS})
 endif()
 
 # ==============================================================================
