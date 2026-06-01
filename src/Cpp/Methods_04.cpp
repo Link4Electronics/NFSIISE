@@ -1359,7 +1359,9 @@ Fn(void) Game::_sub_430200()
 	eax = 0x14; //mov
 	esp -= 4; _sub_48550C(); esp += 4; //call
 	esp -= 4; _sub_422530(); esp += 4; //call
+#if !defined(__powerpc64__) && !defined(__PPC64__)
 	esp -= 4; _sub_408730(); esp += 4; //call
+#endif
 	esp -= 4; _sub_476DC0(); esp += 4; //call
 	esp -= 4; _sub_4769D0(); esp += 4; //call
 	eax = ebp; //mov
