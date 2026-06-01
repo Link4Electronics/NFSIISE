@@ -58,7 +58,14 @@ static pthread_mutex_t pool_mtx = PTHREAD_MUTEX_INITIALIZER;
 #define MAX_POOL_CHUNKS 12
 static void  *pool_chunks[MAX_POOL_CHUNKS];
 static size_t pool_chunk_sz[MAX_POOL_CHUNKS];
-static int    pool_nchunks = 0;
+static int pool_nchunks = 0;
+
+/* Bitmask tracking which pool_chunks entries have been used by the bump
+   allocator (via pool_preallocate or pool_grow fallback).  pool_grow
+   will only switch to a chunk whose bit is NOT set, preventing the
+   cycling-back-to-exhausted-chunk problem that would otherwise let
+   new allocations silently overwrite already-allocated memory. */
+static uint16_t pool_bump_mask = 0;
 
 /* Return 1 when ptr falls inside one of our known pool chunks. */
 static int in_pool(const void *ptr)
@@ -142,6 +149,20 @@ mapped_ok:
 		return 1;
 	}
 
+	/* All addrs[] entries already tracked — try switching to a pre-allocated
+	   chunk that hasn't been used for bump allocation yet.  Without this
+	   fallback the game exhausts the bump space in the largest chunk and
+	   then malloc32 returns NULL because pool_grow can't find any "new"
+	   addresses (they were all added to pool_chunks during
+	   pool_preallocate). */
+	for (int i = 0; i < pool_nchunks; i++) {
+		if (pool_bump_mask & (uint16_t)(1 << i))
+			continue;
+		pool_bump_mask |= (uint16_t)(1 << i);
+		pool_cur  = pool_chunks[i];
+		pool_left = pool_chunk_sz[i];
+		return 1;
+	}
 	return 0;
 }
 
@@ -163,6 +184,7 @@ void pool_preallocate(void)
 				best = i;
 		pool_cur  = pool_chunks[best];
 		pool_left = pool_chunk_sz[best];
+		pool_bump_mask = (uint16_t)(1 << best);
 	}
 	/* pool chunks are tracked in pool_chunks/pool_chunk_sz */
 	/* Targeted fallback for embedded x86 VAs not covered by pool_grow.
