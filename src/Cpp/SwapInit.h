@@ -1,5 +1,12 @@
 #if defined(HOST_BIG_ENDIAN)
 static void swap_initial_data() {
+#if defined(__powerpc64__) || defined(__PPC64__)
+	/* Application.h read32/write32 handle byte-swap at runtime.
+	 * All memory is kept in LE order — no init-time swap needed.
+	 * #undef directives still run (preprocessor), so macros are
+	 * correctly undefined for Entry.cpp's direct struct access. */
+	return;
+#endif
     uint32_t *p32;
     uint16_t *p16;
 #undef dword_4E5010

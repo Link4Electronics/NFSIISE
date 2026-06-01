@@ -33,8 +33,10 @@ extern "C" void nfs2seEntrypoint()
 		uint16_t *empty = (uint16_t *)malloc32(4);
 		if (empty) {
 			empty[0] = 0; /* null wchar L"" */
-			/* Direct write: use raw struct member (SwapInit.h may #undef the macro) */
-			*(volatile uint32_t *)_bss.dword_5134D8 = (uint32_t)(intptr_t)empty;
+			/* Use write32 for LE byte order (consistent with read32/write32 in
+			   Application.h).  Raw native write would store in host BE order,
+			   causing a double-swap mismatch when read32 reads it as LE. */
+			Application::write32((void *)&_bss.dword_5134D8, (uint32_t)(intptr_t)empty);
 		}
 	}
 #endif
