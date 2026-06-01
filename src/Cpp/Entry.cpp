@@ -61,23 +61,27 @@ extern "C" void nfs2seEntrypoint()
 	   CreateDevice reading rguid from push32(dword_4E27D8)). */
 	{
 		uintptr_t h = (uintptr_t)&_data;
-		uint32_t a = (uint32_t)h;
-		size_t sz = (sizeof(DataLayout) + 0xFFF) & ~0xFFF;
-		void *m = mmap((void*)(uintptr_t)a, sz,
+		uintptr_t target = (uintptr_t)(uint32_t)h;  /* zero-extended 32-bit truncation */
+		uintptr_t pg = target & ~(uintptr_t)0xFFF;  /* page-align down */
+		size_t off = target - pg;
+		size_t sz = (sizeof(DataLayout) + off + 0xFFF) & ~0xFFF;
+		void *m = mmap((void*)pg, sz,
 		               PROT_READ|PROT_WRITE,
 		               MAP_FIXED|MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
 		if (m != MAP_FAILED)
-			memcpy(m, (void*)h, sizeof(DataLayout));
+			memcpy((void*)target, (void*)h, sizeof(DataLayout));
 	}
 	{
 		uintptr_t h = (uintptr_t)&_bss;
-		uint32_t a = (uint32_t)h;
-		size_t sz = (sizeof(BssLayout) + 0xFFF) & ~0xFFF;
-		void *m = mmap((void*)(uintptr_t)a, sz,
+		uintptr_t target = (uintptr_t)(uint32_t)h;
+		uintptr_t pg = target & ~(uintptr_t)0xFFF;
+		size_t off = target - pg;
+		size_t sz = (sizeof(BssLayout) + off + 0xFFF) & ~0xFFF;
+		void *m = mmap((void*)pg, sz,
 		               PROT_READ|PROT_WRITE,
 		               MAP_FIXED|MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
 		if (m != MAP_FAILED)
-			memcpy(m, (void*)h, sizeof(BssLayout));
+			memcpy((void*)target, (void*)h, sizeof(BssLayout));
 	}
 #endif
 
