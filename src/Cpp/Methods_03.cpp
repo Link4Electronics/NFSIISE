@@ -2355,13 +2355,15 @@ loc_423EBB:
 	esp -= 4; _sub_482EB4(); esp += 4; //call
 	edx = ebp; //mov
 	ecx = eax; //mov
-#if defined(__powerpc64__) || defined(__PPC64__)
-	if (!ecx) goto loc_423F6E;
-#endif
 	esp -= 4; _sub_426890(); esp += 4; //call
 	ebx = to32i(dword_4E8AF8); //mov
+#if defined(__powerpc64__) || defined(__PPC64__)
+	edi = ecx ? to32i(ecx+2) : 0; //mov
+	ecx = ecx ? to32i(ecx+4) : 0; //mov
+#else
 	edi = to32i(ecx+2); //mov
 	ecx = to32i(ecx+4); //mov
+#endif
 	sar(edi, (int32_t)0x10);
 	sar(ecx, (int32_t)0x10);
 	inc(edi);
