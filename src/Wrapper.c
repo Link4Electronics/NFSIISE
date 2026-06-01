@@ -80,16 +80,26 @@ static int add_pool_chunk(void *base)
 /* Pool chunks below this must be sized to not overlap the code segment. */
 #define POOL_LOW_MAX 0x10000000U
 
+/* _end linker symbol — marks the end of the binary's BSS.  The lowest
+   pool chunk starts at the next page boundary after _end so that x86
+   VAs just above the data segment are covered. */
+extern char _end[];
+
 static int pool_grow(void)
 {
+	/* Compute the page-aligned start just above the binary's data/BSS. */
+	uintptr_t low_start = ((uintptr_t)_end + 0xFFF) & ~(uintptr_t)0xFFF;
+	if (low_start >= POOL_LOW_MAX)
+		low_start = 0x01000000;  /* fallback: shouldn't happen */
+
 	/* Non-overlapping identity pool ranges.  Each range must end
 	   before (or at) the next range's start, otherwise MAP_FIXED_
 	   NOREPLACE fails with EEXIST.  Together the ranges cover the
 	   full game heap VA space up to 0x80000000 (2 GB). */
-	static const uintptr_t addrs[] = {
-		0x01B9E000,  /* low:  [0x01B9E000, 0x10000000)  ~229 MB */
-		0x20000000,  /* mid:  [0x20000000, 0x40000000)   512 MB */
-		0x40000000,  /* high: [0x40000000, 0x80000000)     1 GB */
+	const uintptr_t addrs[] = {
+		low_start,   /* low:  [low_start, 0x10000000)            ~240 MB */
+		0x20000000,  /* mid:  [0x20000000, 0x40000000)           512 MB */
+		0x40000000,  /* high: [0x40000000, 0x80000000)             1 GB */
 	};
 	for (int i = 0; i < (int)(sizeof addrs / sizeof addrs[0]); i++) {
 		int skip = 0;
@@ -116,10 +126,18 @@ static int pool_grow(void)
 			goto mapped_ok;
 		}
 		if (errno == EEXIST) {
+			/* Low-range addresses (< POOL_LOW_MAX) may EEXIST
+			   because the kernel's BSS zero-fill pages extend
+			   up to our start address.  Try plain MAP_FIXED
+			   (safe to replace zero-fill pages).  Higher
+			   addresses (>= POOL_LOW_MAX) skip as before. */
+			if (addrs[i] < POOL_LOW_MAX)
+				goto try_fixed;
 			continue;
 		}
 		/* EINVAL → flag not supported; fall through to plain MAP_FIXED */
 #endif
+try_fixed:
 		p = mmap((void *)addrs[i], sz,
 			       PROT_READ | PROT_WRITE,
 			       MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,

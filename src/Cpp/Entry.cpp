@@ -16,14 +16,16 @@ extern "C" void nfs2seEntrypoint()
 {
 	swap_initial_data();
 
-#if defined(__powerpc64__) || defined(__PPC64__)
+#if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__)
 	/* Initialise the x86-to-host address translator with the
 	   BSS/DATA section bounds. */
 	init_translation(
 		(uintptr_t)&_bss,  sizeof(_bss),
 		(uintptr_t)&_data, sizeof(_data));
 
+#if defined(__powerpc64__) || defined(__PPC64__)
 	pool_preallocate(); /* second call is a no-op if main() already did it */
+#endif
 #endif
 
 #if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)

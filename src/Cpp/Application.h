@@ -141,6 +141,17 @@ struct Application : public CPU
 			c.addr = nullptr;
 		}
 	}
+#elif defined(__aarch64__)
+
+	/* ARM64: translate x86 VAs to host addresses via translate_x86_addr,
+	   then access memory directly (no byte-swap, no cache — ARM64 is
+	   little-endian and handles unaligned access fine). */
+	template<typename T>
+	static FnInl(uintptr_t) za(const T a)
+	{
+		return translate_x86_addr((uint32_t)(intptr_t)a);
+	}
+
 #endif
 
 	template<typename T>
@@ -163,6 +174,8 @@ struct Application : public CPU
 			__builtin_memcpy(&c.val, &v, sizeof(double));
 		}
 		return c.val;
+#elif defined(__aarch64__)
+		return *(double *)xlate_addr(addr);
 #else
 		return *(double *)addr;
 #endif
@@ -181,6 +194,8 @@ struct Application : public CPU
 			__builtin_memcpy(&c.val, &v, sizeof(float));
 		}
 		return c.val;
+#elif defined(__aarch64__)
+		return *(float *)xlate_addr(addr);
 #else
 		return *(float *)addr;
 #endif
@@ -198,6 +213,8 @@ struct Application : public CPU
 			c.val = (int64_t)read64(c.addr);
 		}
 		return c.val;
+#elif defined(__aarch64__)
+		return *(int64_t *)xlate_addr(addr);
 #else
 		return *(int64_t *)addr;
 #endif
@@ -215,6 +232,8 @@ struct Application : public CPU
 			c.val = (int32_t)read32(c.addr);
 		}
 		return c.val;
+#elif defined(__aarch64__)
+		return *(int32_t *)xlate_addr(addr);
 #else
 		return *(int32_t *)addr;
 #endif
@@ -232,6 +251,8 @@ struct Application : public CPU
 			c.val = (int16_t)read16(c.addr);
 		}
 		return c.val;
+#elif defined(__aarch64__)
+		return *(int16_t *)xlate_addr(addr);
 #else
 		return *(int16_t *)addr;
 #endif
@@ -248,6 +269,8 @@ struct Application : public CPU
 	{
 #if defined(__powerpc64__) || defined(__PPC64__)
 		return *(int8_t *)za(addr);
+#elif defined(__aarch64__)
+		return *(int8_t *)xlate_addr(addr);
 #else
 		return *(int8_t *)addr;
 #endif
@@ -632,6 +655,8 @@ struct Application : public CPU
 	{
 #if defined(__powerpc64__) || defined(__PPC64__)
 		write8((void *)za(edi), read8((const void *)za(esi)));
+#elif defined(__aarch64__)
+		*(int8_t *)xlate_addr(edi) = *(int8_t *)xlate_addr(esi);
 #else
 		*(int8_t *)edi = *(int8_t *)esi;
 #endif
@@ -642,6 +667,8 @@ struct Application : public CPU
 	{
 #if defined(__powerpc64__) || defined(__PPC64__)
 		write16((void *)za(edi), read16((const void *)za(esi)));
+#elif defined(__aarch64__)
+		*(int16_t *)xlate_addr(edi) = *(int16_t *)xlate_addr(esi);
 #else
 		*(int16_t *)edi = *(int16_t *)esi;
 #endif
@@ -652,6 +679,8 @@ struct Application : public CPU
 	{
 #if defined(__powerpc64__) || defined(__PPC64__)
 		write32((void *)za(edi), read32((const void *)za(esi)));
+#elif defined(__aarch64__)
+		*(int32_t *)xlate_addr(edi) = *(int32_t *)xlate_addr(esi);
 #else
 		*(int32_t *)edi = *(int32_t *)esi;
 #endif
@@ -663,6 +692,8 @@ struct Application : public CPU
 	{
 #if defined(__powerpc64__) || defined(__PPC64__)
 		write8((void *)za(edi), (unsigned char)al);
+#elif defined(__aarch64__)
+		*(int8_t *)xlate_addr(edi) = al;
 #else
 		*(int8_t *)edi = al;
 #endif
@@ -672,6 +703,8 @@ struct Application : public CPU
 	{
 #if defined(__powerpc64__) || defined(__PPC64__)
 		write32((void *)za(edi), (uint32_t)eax);
+#elif defined(__aarch64__)
+		*(int32_t *)xlate_addr(edi) = eax;
 #else
 		*(int32_t *)edi = eax;
 #endif
@@ -682,6 +715,8 @@ struct Application : public CPU
 	{
 #if defined(__powerpc64__) || defined(__PPC64__)
 		const int8_t val = al - (int8_t)read8((const void *)za(edi));
+#elif defined(__aarch64__)
+		const int8_t val = al - *(int8_t *)xlate_addr(edi);
 #else
 		const int8_t val = al - *(int8_t *)edi;
 #endif
@@ -695,6 +730,8 @@ struct Application : public CPU
 		const int8_t v_esi = (int8_t)read8((const void *)za(esi));
 		const int8_t v_edi = (int8_t)read8((const void *)za(edi));
 		cmp(v_esi, v_edi);
+#elif defined(__aarch64__)
+		cmp(*(int8_t *)xlate_addr(esi), *(int8_t *)xlate_addr(edi));
 #else
 		cmp(*(int8_t *)esi, *(int8_t *)edi);
 #endif

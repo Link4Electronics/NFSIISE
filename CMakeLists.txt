@@ -52,6 +52,7 @@ add_compile_options(-Wno-unused-but-set-variable)
 add_compile_options(-Wno-sign-compare)
 add_compile_options(-Wno-implicit-fallthrough)
 add_compile_options(-Wno-address-of-packed-member)
+add_compile_options(-Wno-missing-braces)
 
 # C-only warning flags (not valid for C++)
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-pointer-to-int-cast")

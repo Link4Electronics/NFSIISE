@@ -9,20 +9,20 @@
 extern "C" {
 #endif
 
-#if defined(__powerpc64__) || defined(__PPC64__)
+#if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__)
 
 void init_translation(uintptr_t bss_base, size_t bss_size,
                       uintptr_t data_base, size_t data_size);
 
-/* Register a pool chunk.  x86_base is the virtual address the game expects;
-   host_base is where it was actually mapped (may differ when MAP_FIXED fails). */
+/* Register a pool chunk for non-identity mappings (PPC64).  On ARM64
+   pool chunks are identity-mapped via MAP_FIXED so this is a no‑op. */
 void add_pool_range(uint32_t x86_base, uintptr_t host_base, size_t size);
 
 uintptr_t translate_x86_addr(uint32_t x86_addr);
 
 /* Reverse translation: given a host pointer, return the x86 virtual address.
-   This is needed in push32() to store x86 VAs (not host addresses) on the
-   emulated stack.  O(1) — uses the linear struct-layout mapping. */
+   Needed for push32().  On ARM64 the identity stub works for pool/code but
+   DATA/BSS struct fields need the linear layout mapping. */
 uint32_t translate_host_to_x86(const void *host_addr);
 
 #else
