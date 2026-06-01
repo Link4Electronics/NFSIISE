@@ -25,6 +25,13 @@ uintptr_t translate_x86_addr(uint32_t x86_addr);
    DATA/BSS struct fields need the linear layout mapping. */
 uint32_t translate_host_to_x86(const void *host_addr);
 
+/* Convert a truncated 32-bit address back to the full 64-bit host address.
+   On PPC64, the truncated form of a DATA/BSS host pointer (from push32)
+   is NOT identity-mapped — this function recovers the original 64-bit
+   pointer so wrapper functions can dereference it correctly.
+   On identity-mapped platforms this is a no-op (zero-extend). */
+uintptr_t translate_truncated_addr(uint32_t truncated);
+
 #else
 /* x86_64 / fallback: host addresses ARE x86 VAs, so everything is identity. */
 static inline void init_translation(uintptr_t bss_base, size_t bss_size,
@@ -32,6 +39,7 @@ static inline void init_translation(uintptr_t bss_base, size_t bss_size,
 static inline void add_pool_range(uint32_t x86_base, uintptr_t host_base, size_t size) {}
 static inline uintptr_t translate_x86_addr(uint32_t x86_addr) { return x86_addr; }
 static inline uint32_t  translate_host_to_x86(const void *host_addr) { return (uint32_t)(uintptr_t)host_addr; }
+static inline uintptr_t translate_truncated_addr(uint32_t truncated) { return (uintptr_t)truncated; }
 
 #endif /* need_translation */
 

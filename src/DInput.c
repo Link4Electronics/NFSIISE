@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 
 #include "DInput.h"
+#include "Cpp/MemoryTranslate.h"
 
 #ifdef NFS_CPP
 	void Release_wrap(void *);
@@ -846,7 +847,13 @@ MAYBE_STATIC REALIGN STDCALL uint32_t CreateEffect(DirectInputDevice **this, con
 	DINPUT_SET_VTABLE(dinput_eff->Unload, WRAP_NAME(Unload));
 
 	if (rguid)
-		memcpy(&dinput_eff->guid, rguid, sizeof(GUID));
+	{
+		const uint32_t *src = (const uint32_t *)translate_truncated_addr((uint32_t)(uintptr_t)rguid);
+		dinput_eff->guid.a = read32le(&src[0]);
+		dinput_eff->guid.b = read32le(&src[1]);
+		dinput_eff->guid.c = read32le(&src[2]);
+		dinput_eff->guid.d = read32le(&src[3]);
+	}
 
 	maybeInitEffect(dev, dinput_eff);
 	setEffect(dinput_eff, di_eff);
@@ -946,9 +953,26 @@ MAYBE_STATIC REALIGN STDCALL uint32_t CreateDevice(void **this, const GUID *cons
 	DINPUT_SET_VTABLE(dinputDev->SendForceFeedbackCommand, WRAP_NAME(SendForceFeedbackCommand));
 	DINPUT_SET_VTABLE(dinputDev->Poll, WRAP_NAME(Poll));
 
-	memcpy(&dinputDev->guid, rguid, sizeof(GUID));
+	{
+		/* The GUID data (dword_4E27D8 in the x86 DATA segment) is stored
+		   in little-endian byte order.  On PPC64 big-endian, native
+		   *(uint32_t *) reads would byte-swap it, and on all platforms
+		   the truncated address from push32 may not be identity-mapped.
+		   Use read32le for LE byte order and translate_truncated_addr
+		   to recover the full 64-bit host address. */
+		const uint32_t *src = (const uint32_t *)translate_truncated_addr((uint32_t)(uintptr_t)rguid);
+		dinputDev->guid.a = read32le(&src[0]);
+		dinputDev->guid.b = read32le(&src[1]);
+		dinputDev->guid.c = read32le(&src[2]);
+		dinputDev->guid.d = read32le(&src[3]);
+	}
 
 	dinputDev->gain = 255;
+
+	/* Also translate for the directInputDevice output pointer. */
+#if defined(__powerpc64__) || defined(__PPC64__)
+	directInputDevice = (DirectInputDevice ***)translate_truncated_addr((uint32_t)(uintptr_t)directInputDevice);
+#endif
 
 	if (dinputDev->guid.a == MOUSE || dinputDev->guid.a == JOYSTICK)
 	{
