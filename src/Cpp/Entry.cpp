@@ -74,11 +74,18 @@ extern "C" void nfs2seEntrypoint()
 			empty_w[0] = 0;
 			Application::write32((void *)&_bss.dword_5134D8, (uint32_t)(intptr_t)empty_w);
 		}
-		char *empty_c = (char *)malloc32(1);
-		if (empty_c) {
-			empty_c[0] = '\0';
-			Application::write32((void *)&_bss.dword_5134B4, (uint32_t)(intptr_t)empty_c);
-			Application::write32((void *)&_bss.dword_5134B8, (uint32_t)(intptr_t)empty_c);
+		/* Path prefix for game data files.  The format strings are
+		   "%s<filename>" (no "/" separator), so the prefix must include
+		   a trailing slash, e.g. "fedata/pc/".  The x86 config parser
+		   would normally set this from install.win, but on non-x86
+		   platforms the hash-table/file-loading chain may not work
+		   during early init, so we hardcode the expected path. */
+		char *data_path = (char *)malloc32(12);
+		if (data_path) {
+			memcpy(data_path, "fedata/pc/", 11);
+			data_path[11] = '\0';
+			Application::write32((void *)&_bss.dword_5134B4, (uint32_t)(intptr_t)data_path);
+			Application::write32((void *)&_bss.dword_5134B8, (uint32_t)(intptr_t)data_path);
 		}
 	}
 #endif
