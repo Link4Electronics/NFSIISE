@@ -700,6 +700,43 @@ and returns without calling `_sub_41B620`.
 | 14 | `_sub_408CC0` null guard | Methods_01.cpp:10748 | Crash in file-read chain |
 | 15 | Config parser re-enabled | Methods_04.cpp:1356 | BSS fields stay default |
 | 16 | Byte-order initializer swap | SwapInit.h | TLS size 0xF4000000 overflow |
+| 17 | `dword_5134B4`/`dword_5134B8` init `"fedata/pc/"` | Entry.cpp | PPC64 file paths |
+| 18 | `_sub_486724` null guard for `dword_4DD76C` | Methods_10.cpp:5372 | PPC64 crash in binary search |
+| 19 | `_sub_41B650`/`_sub_41B670` null guards | Methods_02.cpp:8247,8261 | PPC64 null dword_4D4AE0 |
+| 20 | `_sub_423EA0` null guard (`ecx+2`) | Methods_03.cpp:2360 | PPC64 null base pointer |
+| 21 | `_sub_482E60` null guard | Methods_10.cpp:705 | PPC64 read32(0+8) |
+| 22 | `_sub_49E448` guard in `_sub_4A63B0` | Methods_13.cpp:9597 | PPC64 exit crash |
+| 23 | `byte_512ECC` guard removed from `_sub_408730` | Methods_01.cpp:10422,10436 | PPC64 byte reset |
+
+### Session 5 (June 2026) — Recurring crash in `_sub_4866D0`, file-loading root cause still unknown
+
+**Crash:** `read32(0x93b7fb4a)` at Methods_10.cpp:5333 in `_sub_4866D0` (called from
+`_sub_486724` → `_sub_4823E0`).  Same address across all builds, `0x93b7fb4c` is the
+`edx` value left by the callback `sub_4A688C` (stored in `dword_4DD788`).
+
+**Root cause (confirmed):** `dword_4DD76C` and `dword_4DD75C` (DATA, init 0) are never
+set because the file-loading chain never succeeds — `_sub_486F40` returns 0 for every
+file, so `_sub_487060` (which sets these fields) is never called.  `_sub_486724` uses
+`dword_4DD76C` as an array base pointer; when 0, the binary-search pointer arithmetic
+produces the unmapped address `0x93b7fb4a`.
+
+**Still unclear why file loading fails.** `dword_5134B4`/`dword_5134B8` are set to
+`"fedata/pc/"` in Entry.cpp.  The hash table is allocated by `_sub_45AC50` via
+`calloc_wrap` (PPC64 fix).  `CreateFileA_wrap` should open the file.  The code path
+is identical to x86_64 where it works.  Possibilities:
+- The `wrap_regparm2` / stack argument mechanism has a subtle PPC64 bug
+- `dword_4DB5F8` gating in `_sub_487668` (but it's 0 on ALL platforms)
+- Some DATA field needed for file loading is never set (on x86_64, the config parser
+  or other init code sets values that PPC64 never reaches)
+
+**Fixes applied:**
+1. Entry.cpp: `dword_5134B4` and `dword_5134B8` initialized to `"fedata/pc/"` (was `""`)
+2. Entry.cpp: removed `byte_512ECC` reset in `_sub_408730` (Methods_01.cpp:10422,10436)
+3. Methods_10.cpp: PPC64 null guard in `_sub_486724` — return 0 if `dword_4DD76C == 0`
+4. Methods_02.cpp: PPC64 null guards in `_sub_41B650`/`_sub_41B670` — return 0 when `dword_4D4AE0` is null
+5. Methods_03.cpp: PPC64 null guard in `_sub_423EA0` — guard `edi = to32i(ecx+2)` when `ecx` is null
+6. Methods_10.cpp: PPC64 null guards in `_sub_487060` (already present) and `_sub_482E60` (new)
+7. Methods_01.cpp: PPC64 null guard in `_sub_49E448` call (`_sub_4A63B0`)
 
 ### Known structural issue: BSS fields that should be DATA
 
@@ -717,9 +754,3 @@ and ARM64 the BSS is truly zero, hitting the crash chain described above.
 **Long-term fix:** Move these fields into `DataLayout` (DATA section) with
 proper initialisers.  This is deferred because it requires regenerating the
 transpiled struct layout — a session for another day.
-
-### Next steps
-1. **This session:** Focus on making PPC64BE work with the current BSS-initialisation approach (free-list pre-init, calloc hash table, config parser fixes).
-2. Test on PPC64BE — the free-list pre-init + calloc hash table should let the full file-loading chain (`_sub_486F40` → `_sub_487668` → `_sub_45AC50` → `_sub_484510`) work, enabling config parsing, file loading, and game boot to main menu.
-3. Render loop and audio may have additional endianness bugs.
-4. If gameplay works, begin testing car selection, track loading, and physics for endian-breakage.

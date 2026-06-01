@@ -5368,6 +5368,17 @@ Fn(void) Game::_sub_486724()
 	push32(edx);
 	push32(esi);
 	esi = eax; //mov
+#if defined(__powerpc64__) || defined(__PPC64__)
+	if (to32i(dword_4DD76C) == 0)
+	{
+		xor_(eax, eax);
+		pop32(esi);
+		pop32(edx);
+		pop32(ecx);
+		pop32(ebx);
+		return;
+	}
+#endif
 	ecx = (int32_t)(intptr_t)(eax-0x20); //lea
 	eax = (int32_t)(intptr_t)(ecx*4+0); //lea
 	sub(eax, ecx);
