@@ -57,7 +57,8 @@ static pthread_mutex_t pool_mtx = PTHREAD_MUTEX_INITIALIZER;
    reject stale pointers that leaked in from the original x86 game data. */
 #define MAX_POOL_CHUNKS 12
 static void  *pool_chunks[MAX_POOL_CHUNKS];
-static size_t pool_chunk_sz[MAX_POOL_CHUNKS];
+static size_t pool_chunk_sz[MAX_POOL_CHUNKS];  /* full mmap size (for in_pool) */
+static size_t pool_bump_sz[MAX_POOL_CHUNKS];   /* bump-usable size (≤ pool_chunk_sz) */
 static int pool_nchunks = 0;
 
 /* Bitmask tracking which pool_chunks entries have been used by the bump
@@ -142,8 +143,17 @@ static int pool_grow(void)
 
 mapped_ok:
 		pool_cur  = p;
-		pool_left = sz;
-		pool_chunk_sz[pool_nchunks] = sz;
+		/* For the last chunk, reserve the guard page so the bump
+		   allocator never hands out addresses within page_size of
+		   the mapping end.  The guard bytes ARE mapped (they were
+		   included in the mmap) so any out-of-bounds read32/read64
+		   or unrolled STOSD write that overflows the bump space by
+		   less than page_size bytes will land in accessible memory
+		   instead of causing SIGSEGV. */
+		pool_left = (i < (int)(sizeof addrs / sizeof addrs[0]) - 1)
+			    ? sz : (size_t)(POOL_SIZE * 4);
+		pool_chunk_sz[pool_nchunks] = sz; /* full size for in_pool */
+		pool_bump_sz[pool_nchunks] = (size_t)pool_left;
 		add_pool_chunk(p);
 		add_pool_range((uint32_t)addrs[i], (uintptr_t)p, sz);
 		return 1;
@@ -160,7 +170,7 @@ mapped_ok:
 			continue;
 		pool_bump_mask |= (uint16_t)(1 << i);
 		pool_cur  = pool_chunks[i];
-		pool_left = pool_chunk_sz[i];
+		pool_left = pool_bump_sz[i];  /* bump-safe size (reserves guard page) */
 		return 1;
 	}
 	return 0;
@@ -183,7 +193,7 @@ void pool_preallocate(void)
 			if (pool_chunk_sz[i] > pool_chunk_sz[best])
 				best = i;
 		pool_cur  = pool_chunks[best];
-		pool_left = pool_chunk_sz[best];
+		pool_left = pool_bump_sz[best];
 		pool_bump_mask = (uint16_t)(1 << best);
 	}
 	/* pool chunks are tracked in pool_chunks/pool_chunk_sz */

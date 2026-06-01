@@ -383,8 +383,10 @@ All source files ported from SDL2 to SDL3.  Builds cleanly with zero warnings.
 - **Wrapper.c: low chunk fallback** — `0x01000000` → `0x18000000` (`_end = 0x11a51948` on PPC64)
 - **Wrapper.c: removed PPC64 non-identity fallback** — `addrs_check[]` mmap loop gone
 - **Wrapper.c: `vsprintf_wrap`** — all 7 `*ap++` x86 stack reads replaced with `read32le(ap++)` via `ByteUtils.h` (PPC64BE byte-swap fix)
-- **Wrapper.c: pool guard page** — last chunk size changed from `POOL_SIZE * 4` to `POOL_SIZE * 4 + page_size` for boundary-crossing safety
 - **Wrapper.c: pool chunk selection** — selects **largest** chunk for bump allocation (size-based scan) instead of first chunk ≥ `POOL_LOW_MAX`
+- **Wrapper.c: pool_grow fallback to pre-allocated chunks** — when all addrs are skipped (already in pool_chunks from pool_preallocate), iterate pool_chunks and switch to one not yet used for bump allocation, tracked via `pool_bump_mask` bitmask to prevent cycling back to exhausted chunks
+- **Wrapper.c: guard page reservation (`pool_bump_sz`)** — last chunk mmap size = `POOL_SIZE * 4 + page_size` (~1 GB + 64 KB), but `pool_left = POOL_SIZE * 4` (~1 GB). The guard page is mapped but never handed out by `malloc32`, providing a safety catch for `read32`/`read64` overruns or unrolled STOSD writes within 64 KB of the pool boundary
+- **Wrapper.c: `pool_bump_sz[]` array** — stores bump-usable size per chunk (≤ `pool_chunk_sz[]`). Used by pool_preallocate and pool_grow fallback when setting `pool_left`, ensuring the guard reservation is maintained across chunk switches
 - **MemoryTranslate.cpp: PPC64 merged into ARM64 identity path** — `add_pool_range` no-op, `translate_x86_addr` only handles BSS/DATA x86 VAs
 - **BSS.h: removed `bss_pool()` redirect** — static `_bss` for all platforms
 - **Memory.cpp: removed `#if !defined(__powerpc64__)`** — `BssLayout _bss` always defined
@@ -393,26 +395,20 @@ All source files ported from SDL2 to SDL3.  Builds cleanly with zero warnings.
 - **Entry.cpp: fixed native write at line 37** — `*(uint32_t *)` → `Application::write32()` for LE byte order
 - **Application.h: cleaned `za()` debug spam** — removed `fprintf` on PPC64
 
-### Current crash (SIGSEGV at `___STOSD` → `read32(0x8080FFFD)`)
-The `___STOSD` unrolled loop writes 32 bytes per iteration via `to32i(eax) = edx`.
-The bump allocator consumed the largest chunk (`0x40000000`, ~1 GB + 64KB guard)
-and reached address `0x8080FFFD`. `read32(0x8080FFFD)` reads bytes
-`[0x8080FFFD, 0x80810000)` — byte 3 lands at `0x80810000`, one byte past the
-pool end. Same root cause as before: the guard page just moved the crash from
-`0x80800000` to `0x80810000`.
+### Current status
+Game boots with SDL window visible, then crashes during `_doStart` while `___STOSD` (memset loop) writes near the end of the bump allocation space. The guard page reservation and pool_grow fallback together should provide enough room for `_doStart` by switching chunks when the first is exhausted, with the guard page protecting any boundary-crossing reads/writes from the STOSD loop.
 
-### Root cause
-`malloc32` calls `pool_grow()` when the bump allocator runs out of space.
-`pool_grow` iterates `addrs[]` but skips addresses already tracked in
-`pool_chunks[]`. All pre-allocated chunks (including the largest at `0x40000000`)
-were added during `pool_preallocate()`, so when the bump allocator exhausts
-the current chunk, `pool_grow` returns 0 → `malloc32` returns NULL.
+### Pool layout (PPC64)
+3 pre-allocated chunks (mmap via MAP_FIXED_NOREPLACE), consumed by bump allocator in decreasing size order:
 
-**Partial fix:** Selecting the largest chunk gives ~1 GB of bump space, which
-might be enough for `_doStart`. If the game needs more, `pool_grow` must be
-changed to switch to a pre-allocated chunk instead of trying to mmap a new one.
+| Address | Size (mmap) | Bump-usable | Used when |
+|---------|-------------|-------------|-----------|
+| `0x18000000` | 128 MB | 128 MB | after 1 GB exhausted (fallback #1) |
+| `0x20000000` | 512 MB | 512 MB | after 128 MB exhausted (fallback #2) |
+| `0x40000000` | ~1 GB + 64 KB guard | ~1 GB | initial selection (largest) |
+
+The guard page `[0x80800000, 0x80810000)` is mapped R/W but never tracked by the bump allocator. Any read/write that overflows the bump space by ≤ 64 KB lands in accessible memory.
 
 ### Next steps
-1. Test the large-chunk selection fix on PPC64BE
-2. If SIGSEGV persists, modify `pool_grow` to switch bump allocator to a
-   pre-allocated chunk instead of skipping it
+1. Test the combined fixes on PPC64BE
+2. If game still crashes, check whether it needs more than ~1.64 GB total bump space
