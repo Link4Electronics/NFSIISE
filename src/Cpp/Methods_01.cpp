@@ -10528,17 +10528,6 @@ loc_408974:
 	xor_(ebp, ebp);
 	to32i(dword_4D5A28) = eax; //mov
 	goto loc_4087BC;
-loc_408A16:
-	xor_(al, al);
-	to8i(byte_512ECC) = al; //mov
-	eax = ebp; //mov
-	pop32(ebx);
-	pop32(esi);
-	pop32(edi);
-	add(esp, (int32_t)0x118);
-	pop32(ebp);
-	pop32(edx);
-	pop32(ecx);
 }
 Fn(void) Game::_sub_408A30()
 {
