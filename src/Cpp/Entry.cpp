@@ -33,7 +33,7 @@ extern "C" void nfs2seEntrypoint()
 	   On PPC64, _sub_4642F0 is entirely skipped by a platform guard, so
 	   byte_512ECC stays 0 (BSS), causing the game to look for DCT movies,
 	   fail to find them (wrong base path), and exit with an error. */
-	Application::write8((void *)&_bss.byte_512ECC, 1);
+	Application::write8((void *)byte_512ECC, 1);
 #endif
 
 #if defined(__powerpc64__) || defined(__PPC64__) || defined(__aarch64__) || defined(__arm__)
