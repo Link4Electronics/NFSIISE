@@ -1,6 +1,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <sys/mman.h>
 #include "Game.h"
 #include "BSS.h"
 #include "DATA.h"
@@ -47,6 +48,37 @@ extern "C" void nfs2seEntrypoint()
 	#undef dword_4DB6A8
 	memset(&_data.dword_4DB6A8, 0, sizeof(_data.dword_4DB6A8));
 	#define dword_4DB6A8 ((int8_t *)&_data.dword_4DB6A8)
+#endif
+
+#if defined(__powerpc64__) || defined(__PPC64__)
+	/* Identity-map DATA and BSS at their truncated (low 32-bit) host
+	   addresses.  On PPC64 the kernel may load the binary above 4 GB,
+	   so the 32-bit truncation of a host pointer to &_data / &_bss
+	   does NOT correspond to any mapped memory.  push32() truncates
+	   host pointers to 32 bits when pushing onto the x86 stack —
+	   without this mapping the truncated address is invalid and
+	   crashes any wrapper function that dereferences it (e.g.
+	   CreateDevice reading rguid from push32(dword_4E27D8)). */
+	{
+		uintptr_t h = (uintptr_t)&_data;
+		uint32_t a = (uint32_t)h;
+		size_t sz = (sizeof(DataLayout) + 0xFFF) & ~0xFFF;
+		void *m = mmap((void*)(uintptr_t)a, sz,
+		               PROT_READ|PROT_WRITE,
+		               MAP_FIXED|MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+		if (m != MAP_FAILED)
+			memcpy(m, (void*)h, sizeof(DataLayout));
+	}
+	{
+		uintptr_t h = (uintptr_t)&_bss;
+		uint32_t a = (uint32_t)h;
+		size_t sz = (sizeof(BssLayout) + 0xFFF) & ~0xFFF;
+		void *m = mmap((void*)(uintptr_t)a, sz,
+		               PROT_READ|PROT_WRITE,
+		               MAP_FIXED|MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+		if (m != MAP_FAILED)
+			memcpy(m, (void*)h, sizeof(BssLayout));
+	}
 #endif
 
 	Game *game = (Game *)malloc32(sizeof(Game));
