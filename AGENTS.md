@@ -557,3 +557,25 @@ Parameters: `rgdod=0x402ffe32`, `pdwInOut=0x40300032`, `cbObjectData=16`.
 4. The `#else` path (x86_64, ARM64) keeps the original native code.
 
 **Long-term fix needed:** Either (a) fix the game's internal heap to return 4-byte aligned pointers, or (b) add `read32le`/`write32le` wrappers in every function that receives pool pointers from the game.
+
+### Fixed: PPC64 `_sub_49E3E0` returns garbage (broken BSS-pointer arithmetic in allocator)
+
+**Crash:** `read32(p=0xfffffffd)` at `Application.h:47` called from `to32i(addr=-3)` at
+`Methods_13.cpp:3006` in `_sub_49E448`.  The call chain is `_sub_4B09F4` →
+`_sub_4A63B0` → `_sub_49E448`.
+
+**Root cause:** `_sub_4A62F8` at `Methods_13.cpp:9516` calls `_sub_49E3E0(0x1040)`
+to allocate a 4 KB scratch block for the game's internal heap manager.  The
+allocator chain (`_sub_49E3E0` → `_sub_484498` → `_sub_4844D4` → `_sub_484510`)
+manages heap structures in BSS, accessed via `(int32_t)(intptr_t)dword_563D80`
+etc.  On PPC64BE where BSS lives above 4 GB, this truncation produces wrong
+32-bit values.  The allocator reads/writes through these wrong addresses,
+returns a corrupted block pointer (like `0xFFFFFFF9`) → `_sub_49E3E0` adds `+8`
+→ the result wraps to `1` → stored in `dword_4DD774` → `_sub_4A63B0` passes
+`eax=1` to `_sub_49E448` → `to32i(1-4)` = `to32i(-3)` → `read32(0xFFFFFFFD)` → SIGSEGV.
+
+**Fix (`Methods_13.cpp:9512-9519`):** PPC64 guard — skip the `_sub_49E3E0`
+allocation entirely, leaving `dword_4DD774 == 0`.  `_sub_4A63B0` then sees
+`edx == 0` and returns without calling `_sub_49E448`.  The 4 KB scratch block
+is only used for heap internal bookkeeping (tracking free chunks) and is not
+required for correct game operation.

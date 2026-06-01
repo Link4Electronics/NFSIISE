@@ -9509,6 +9509,16 @@ Fn(void) Game::_sub_4A62F8()
 	cmp(to32i(dword_4DD774), (int32_t)0);
 	if (jnz())
 		goto loc_4A631A;
+#if defined(__powerpc64__) || defined(__PPC64__)
+	/* PPC64: the internal heap allocator (_sub_49E3E0 → _sub_484498
+	   → _sub_484510) uses (int32_t)(intptr_t) of BSS field addresses
+	   as heap structure pointers.  On PPC64BE where BSS lives above
+	   4 GiB, truncation produces wrong 32-bit values → allocator
+	   returns garbage → crash in _sub_49E448.  Skip the allocator
+	   entirely so _sub_4A63B0 sees dword_4DD774 == 0 and returns
+	   without calling _sub_49E448. */
+	goto loc_4A631A;
+#else
 	push32(ecx);
 	ecx = 0x1040; //mov
 	eax = ecx; //mov
@@ -9516,6 +9526,7 @@ Fn(void) Game::_sub_4A62F8()
 	esp -= 4; _sub_49E3E0(); esp += 4; //call
 	to32i(dword_4DD774) = eax; //mov
 	pop32(ecx);
+#endif
 loc_4A631A:
 	esp -= 4; _sub_4A6354(); esp += 4; //call
 	cmp(to32i(dword_4DD6FC), (int32_t)1);
