@@ -60,7 +60,7 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-implicit-function-declaration")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-int-conversion")
 
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  add_compile_options(-Wno-c++11-narrowing)
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-c++11-narrowing")
 endif()
 
 # ==============================================================================

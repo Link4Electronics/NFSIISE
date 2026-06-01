@@ -18,6 +18,8 @@ void exit_func();
 	#include <unistd.h>
 	#include <fcntl.h>
 	#include <errno.h>
+	#include <sys/select.h>
+	#include <sys/time.h>
 
 	#ifdef __ANDROID__
 		#include <sys/ioctl.h>
