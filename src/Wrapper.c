@@ -196,6 +196,13 @@ void pool_preallocate(void)
 		pool_left = pool_bump_sz[best];
 		pool_bump_mask = (uint16_t)(1 << best);
 	}
+	fprintf(stderr, "POOL: %d chunks, best=%d, left=%zu (0x%zx), bump_mask=%04x\n",
+		pool_nchunks, best, pool_left, pool_left, pool_bump_mask);
+	for (int i = 0; i < pool_nchunks; i++)
+		fprintf(stderr, "  chunk[%d] = %p  sz=%zu (0x%zx)  bump_sz=%zu (0x%zx)\n",
+			i, pool_chunks[i],
+			pool_chunk_sz[i], pool_chunk_sz[i],
+			pool_bump_sz[i], pool_bump_sz[i]);
 	/* pool chunks are tracked in pool_chunks/pool_chunk_sz */
 	/* Targeted fallback for embedded x86 VAs not covered by pool_grow.
 	   When pool_grow succeeds for 0x02000000 but failed for 0x01B9E000,
