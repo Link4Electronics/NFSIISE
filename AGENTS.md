@@ -576,6 +576,18 @@ allocation entirely, leaving `dword_4DD774 == 0`.  `_sub_4A63B0` then sees
 is only used for heap internal bookkeeping (tracking free chunks) and is not
 required for correct game operation.
 
+### Changed: Re-enabled config parser on PPC64 (Methods_04.cpp:1356)
+
+Removed the `#if !defined(__powerpc64__) && !defined(__PPC64__)` guard that
+skipped `_sub_4642F0` (config parser), `_sub_430780`, and `_sub_408730` on
+PPC64.  With the allocator fixes (`_sub_4A5124`, `_sub_4A5068`,
+`_sub_4A62F8`), the hash-table entry creation for `install.win` may now
+work.  If it still fails, `_sub_4643B0` has a null guard that returns early
+(no crash, but config fields stay at BSS defaults — same as before).
+
+The `byte_512ECC = 1` initialization in Entry.cpp is kept as a safety net
+so movie init is skipped regardless of config parser success.
+
 ### Fixed: "MOVIE FILE NOT FOUND" on PPC64 (skipped config parser)
 
 **Error:** Game shows "MOVIE FILE NOT FOUND" SDL dialog and exits on PPC64
