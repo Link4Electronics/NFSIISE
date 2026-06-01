@@ -6156,10 +6156,19 @@ Fn(void) Game::_sub_4642F0()
 	/* PPC64: hash-table entry creation may fail (allocator init incomplete).
 	   Skip entry processing if lookup returned 0 to avoid null-pointer
 	   crash in _sub_4643B0's to8i(eax).  On x86_64 _sub_486F40 always
-	   returns a valid pointer; on PPC64 it may be 0. */
+	   returns a valid pointer; on PPC64 it may be 0.
+	   Note: loc_464354 is unsafe on PPC64 because dword_5134BC is BSS
+	   (zero), so to8i(eax) = 0 hits address 0.  Do a direct return. */
 	test(eax, eax);
 	if (jz())
-		goto loc_464354;
+	{
+		add(esp, (int32_t)4);
+		pop32(ebp);
+		pop32(edi);
+		pop32(edx);
+		pop32(ecx);
+		return;
+	}
 #endif
 	to32i(dword_513504) = eax; //mov
 	to32i(esp) = eax; //mov

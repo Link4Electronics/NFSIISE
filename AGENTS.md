@@ -492,10 +492,12 @@ and `byte_4DB574`, both of which are DATA fields that are never set on PPC64
 set them).  `_sub_4642F0` then uses 0 as a base address, computes `0 + 3 = 3`,
 and tries to read a byte from address 3 → SIGSEGV.
 
-**Fix (`Methods_07.cpp:6155-6163`):** PPC64-only null guard after
-`_sub_486F40()` returns: if `eax == 0`, jump to `loc_464354` (the early exit
-path that returns without processing the entry).  Mirrors the null-guard
-pattern used in `_sub_484D94`.
+**Fix (`Methods_07.cpp:6155-6171`):** PPC64-only null guard after
+`_sub_486F40()` returns: if `eax == 0`, do a direct return (register
+restoration + clean stack unwind) instead of jumping to `loc_464354`.
+`loc_464354` writes to `dword_5134BC` which is BSS (zero) — on PPC64
+`to8i(dword_5134BC[0]) = 0` would crash at address 0.  Mirrors the
+null-guard pattern used in `_sub_484D94`.
 
 **Why not on x86_64:** `_sub_486F40` always returns a valid pointer on x86_64
 (the hash-table init code works because the relevant DATA/BSS fields are
