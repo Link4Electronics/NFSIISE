@@ -9182,6 +9182,20 @@ Fn(void) Game::_sub_445A60()
 	sub(esp, (int32_t)0x64);
 	edi = esp; //mov
 	esi = to32i(dword_5134A4); //mov
+#if defined(__powerpc64__) || defined(__PPC64__)
+	/* PPC64: dword_5134A4 stays 0 because _sub_4642F0 is skipped
+	   (config hash-table entry creation fails).  Guard null pointer
+	   to prevent SIGSEGV in to8i(esi) below. */
+	if (esi == 0)
+	{
+		add(esp, (int32_t)0x64);
+		pop32(edi);
+		pop32(esi);
+		pop32(edx);
+		pop32(ecx);
+		return;
+	}
+#endif
 	push32(edi);
 loc_445A70:
 	al = to8i(esi); //mov

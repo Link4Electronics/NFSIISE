@@ -1353,14 +1353,23 @@ Fn(void) Game::_sub_430200()
 	to32i(dword_4DABCC) = eax; //mov
 	eax = ebp; //mov
 	xor_(ebx, ebx);
+#if !defined(__powerpc64__) && !defined(__PPC64__)
 	esp -= 4; _sub_4642F0(); esp += 4; //call
 	esp -= 4; _sub_430780(); esp += 4; //call
 	edx = 0x2000; //mov
 	eax = 0x14; //mov
 	esp -= 4; _sub_48550C(); esp += 4; //call
 	esp -= 4; _sub_422530(); esp += 4; //call
-#if !defined(__powerpc64__) && !defined(__PPC64__)
 	esp -= 4; _sub_408730(); esp += 4; //call
+#else
+	/* PPC64: _sub_4642F0 returns early (config hash-table entry creation fails);
+	   all BSS fields it sets (dword_5134A4, dword_5134BC, dword_513464, etc.)
+	   stay 0, causing cascading crashes in _sub_445A60.  Skip both
+	   _sub_4642F0 and its dependent _sub_408730. */
+	edx = 0x2000; //mov
+	eax = 0x14; //mov
+	esp -= 4; _sub_48550C(); esp += 4; //call
+	esp -= 4; _sub_422530(); esp += 4; //call
 #endif
 	esp -= 4; _sub_476DC0(); esp += 4; //call
 	esp -= 4; _sub_4769D0(); esp += 4; //call
