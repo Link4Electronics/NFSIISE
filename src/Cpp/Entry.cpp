@@ -33,8 +33,8 @@ extern "C" void nfs2seEntrypoint()
 		uint16_t *empty = (uint16_t *)malloc32(4);
 		if (empty) {
 			empty[0] = 0; /* null wchar L"" */
-			/* Direct write: dword_5134D8 is a struct macro giving host ptr */
-			*(volatile uint32_t *)dword_5134D8 = (uint32_t)(intptr_t)empty;
+			/* Direct write: use raw struct member (SwapInit.h may #undef the macro) */
+			*(volatile uint32_t *)_bss.dword_5134D8 = (uint32_t)(intptr_t)empty;
 		}
 	}
 #endif
