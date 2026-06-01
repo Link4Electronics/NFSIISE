@@ -1,6 +1,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <cerrno>
 #include <sys/mman.h>
 #include "Game.h"
 #include "BSS.h"
@@ -58,30 +59,82 @@ extern "C" void nfs2seEntrypoint()
 	   host pointers to 32 bits when pushing onto the x86 stack —
 	   without this mapping the truncated address is invalid and
 	   crashes any wrapper function that dereferences it (e.g.
-	   CreateDevice reading rguid from push32(dword_4E27D8)). */
+	   CreateDevice reading rguid from push32(dword_4E27D8)).
+
+	   Use MAP_FIXED_NOREPLACE (not MAP_FIXED) to avoid silently
+	   overwriting critical existing mappings (ld.so, libc, etc.)
+	   which causes jump-to-0x0 crashes when the PLT/GOT is corrupted.
+	   If the target address is occupied, scan nearby page-aligned
+	   addresses for a free range. */
 	{
 		uintptr_t h = (uintptr_t)&_data;
-		uintptr_t target = (uintptr_t)(uint32_t)h;  /* zero-extended 32-bit truncation */
-		uintptr_t pg = target & ~(uintptr_t)0xFFF;  /* page-align down */
+		uintptr_t target = (uintptr_t)(uint32_t)h;
+		long ps = sysconf(_SC_PAGE_SIZE);
+		uintptr_t pg = target & ~(uintptr_t)(ps - 1);
 		size_t off = target - pg;
-		size_t sz = (sizeof(DataLayout) + off + 0xFFF) & ~0xFFF;
-		void *m = mmap((void*)pg, sz,
-		               PROT_READ|PROT_WRITE,
-		               MAP_FIXED|MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
-		if (m != MAP_FAILED)
-			memcpy((void*)target, (void*)h, sizeof(DataLayout));
+		size_t sz = (sizeof(DataLayout) + off + ps - 1) & ~(size_t)(ps - 1);
+		void *m = MAP_FAILED;
+		/* try target address first, then scan ±512 pages (~2 MB on 4K pages) */
+		for (int d = 0; d < 512; d++) {
+			uintptr_t try_addr = pg;
+			if (d > 0) {
+				/* alternate: try_addr +/- (d/2) * ps  (d=1→+1, 2→-1, 3→+2, ...) */
+				long delta = ((long)((d + 1) / 2)) * ps;
+				if (d & 1)
+					try_addr = pg + (uintptr_t)delta;
+				else
+					try_addr = pg - (uintptr_t)delta;
+			}
+			m = mmap((void*)try_addr, sz,
+			         PROT_READ|PROT_WRITE,
+			         MAP_FIXED_NOREPLACE|MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+			if (m != MAP_FAILED)
+				break;
+			if (errno != EEXIST)
+				break;  /* EINVAL or other fatal error — stop trying */
+		}
+		if (m != MAP_FAILED) {
+			memcpy((void*)((uintptr_t)m + off), (void*)h, sizeof(DataLayout));
+		} else {
+			fprintf(stderr, "nfs2se: warning — could not identity-map DATA ("
+			        "target 0x%lx, sz %zu).  Wrapper functions dereferencing "
+			        "truncated addresses will crash.\n",
+			        (unsigned long)target, sz);
+		}
 	}
 	{
 		uintptr_t h = (uintptr_t)&_bss;
 		uintptr_t target = (uintptr_t)(uint32_t)h;
-		uintptr_t pg = target & ~(uintptr_t)0xFFF;
+		long ps = sysconf(_SC_PAGE_SIZE);
+		uintptr_t pg = target & ~(uintptr_t)(ps - 1);
 		size_t off = target - pg;
-		size_t sz = (sizeof(BssLayout) + off + 0xFFF) & ~0xFFF;
-		void *m = mmap((void*)pg, sz,
-		               PROT_READ|PROT_WRITE,
-		               MAP_FIXED|MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
-		if (m != MAP_FAILED)
-			memcpy((void*)target, (void*)h, sizeof(BssLayout));
+		size_t sz = (sizeof(BssLayout) + off + ps - 1) & ~(size_t)(ps - 1);
+		void *m = MAP_FAILED;
+		for (int d = 0; d < 512; d++) {
+			uintptr_t try_addr = pg;
+			if (d > 0) {
+				long delta = ((long)((d + 1) / 2)) * ps;
+				if (d & 1)
+					try_addr = pg + (uintptr_t)delta;
+				else
+					try_addr = pg - (uintptr_t)delta;
+			}
+			m = mmap((void*)try_addr, sz,
+			         PROT_READ|PROT_WRITE,
+			         MAP_FIXED_NOREPLACE|MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+			if (m != MAP_FAILED)
+				break;
+			if (errno != EEXIST)
+				break;
+		}
+		if (m != MAP_FAILED) {
+			memcpy((void*)((uintptr_t)m + off), (void*)h, sizeof(BssLayout));
+		} else {
+			fprintf(stderr, "nfs2se: warning — could not identity-map BSS ("
+			        "target 0x%lx, sz %zu).  Wrapper functions dereferencing "
+			        "truncated addresses will crash.\n",
+			        (unsigned long)target, sz);
+		}
 	}
 #endif
 
