@@ -16,6 +16,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <pthread.h>
+#include "Cpp/ByteUtils.h"
 
 #if defined(HOST_64BIT)
 #if !defined(MAP_FIXED_NOREPLACE) && defined(MAP_FIXED)
@@ -1151,9 +1152,9 @@ REALIGN int32_t vsprintf_wrap(char *s, const char *fmt, void *arg)
 			if (fmt_spec[k] == '*') {
 				if (!got_star) {
 					got_star = 1;
-					width_val = (int)(int32_t)*ap++;
+					width_val = (int)(int32_t)read32le(ap++);
 				} else {
-					prec_val = (int)(int32_t)*ap++;
+					prec_val = (int)(int32_t)read32le(ap++);
 				}
 			}
 		}
@@ -1162,26 +1163,26 @@ REALIGN int32_t vsprintf_wrap(char *s, const char *fmt, void *arg)
 		char arg_buf[256];
 
 		if (conv == 's' || conv == 'p') {
-			uint32_t addr32 = *ap++;
+			uint32_t addr32 = read32le(ap++);
 			void *ptr = (void *)(uintptr_t)addr32;
 			snprintf(arg_buf, sizeof(arg_buf), fmt_spec, ptr);
 		} else if (conv == 'c') {
-			int ch = (int)(int32_t)*ap++ & 0xFF;
+			int ch = (int)(int32_t)read32le(ap++) & 0xFF;
 			snprintf(arg_buf, sizeof(arg_buf), fmt_spec, ch);
 		} else if (conv == 'n') {
 			/* %n writes output count, skip */
 		} else if (conv == 'f' || conv == 'F' || conv == 'e' || conv == 'E' ||
 			   conv == 'g' || conv == 'G' || conv == 'a' || conv == 'A') {
 			/* double: 8 bytes on the stack (pushed as two 32-bit halves) */
-			uint32_t lo = *ap++;
-			uint32_t hi = *ap++;
+			uint32_t lo = read32le(ap++);
+			uint32_t hi = read32le(ap++);
 			double val;
 			uint64_t tmp = (uint64_t)hi << 32 | lo;
 			memcpy(&val, &tmp, 8);
 			snprintf(arg_buf, sizeof(arg_buf), fmt_spec, val);
 		} else {
 			/* integer types: d, i, u, o, x, X */
-			int val = (int)(int32_t)*ap++;
+			int val = (int)(int32_t)read32le(ap++);
 			snprintf(arg_buf, sizeof(arg_buf), fmt_spec, val);
 		}
 
