@@ -4,6 +4,7 @@
 #define DINPUT_H
 
 #include "Wrapper.h"
+#include "Cpp/ByteUtils.h"
 
 #include <SDL3/SDL_joystick.h>
 #include <SDL3/SDL_haptic.h>
@@ -24,7 +25,8 @@
 /* Store a function pointer into a DInputVFunc slot.
    On x64 this truncates to 32 bits (safe: wrappers are in low 4GB). */
 #if defined(HOST_64BIT)
-#define DINPUT_SET_VTABLE(slot, func)  ((slot) = (uint32_t)(uintptr_t)(func))
+#define DINPUT_SET_VTABLE(slot, func)  \
+    do { write32le(&(slot), (uint32_t)(uintptr_t)(func)); } while(0)
 #else
 #define DINPUT_SET_VTABLE(slot, func)  ((slot) = (func))
 #endif
@@ -34,6 +36,19 @@
 #define DINPUT_ADDR(type, val)  ((type *)(uintptr_t)(val))
 #else
 #define DINPUT_ADDR(type, val)  ((type *)(val))
+#endif
+
+/* Dereference an intermediate buffer pointer.
+   On BE hosts: native *(void **) reads 8 bytes but only 4 LE bytes are
+   stored — use read32le to get the correct 32-bit truncated pointer.
+   On LE hosts: *(void **) matches the 4 stored LE bytes (zero-extended
+   to 64 bits by the uintptr_t cast), so native read works fine. */
+#if defined(__powerpc64__) || defined(__PPC64__)
+#define DTHIS_PTR(this_ptr)  ((void *)(uintptr_t)read32le(this_ptr))
+#define DTHIS(type, this_ptr)  DINPUT_ADDR(type, read32le(this_ptr))
+#else
+#define DTHIS_PTR(this_ptr)  (*(void **)(this_ptr))
+#define DTHIS(type, this_ptr)  (*((type **)(this_ptr)))
 #endif
 
 typedef struct

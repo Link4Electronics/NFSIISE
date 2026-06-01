@@ -519,25 +519,23 @@ static void setEffect(DirectInputEffect *dinputEffect, const DIEFFECT *di_eff)
 MAYBE_STATIC REALIGN STDCALL uint32_t QueryInterface(void **this, const IID *const riid, void **object)
 {
 	/* Joystick only */
-	++((DirectInputObject *)(*this - sizeof(DirectInputObject)))->ref;
-	*object = this;
-//	fprintf(stderr, "QueryInterface: 0x%X %p\n", (*riid)[0], *this);
+	++((DirectInputObject *)((char *)DTHIS_PTR(this) - sizeof(DirectInputObject)))->ref;
+	write32le(object, (uint32_t)(uintptr_t)this);
 	return 0;
 }
 MAYBE_STATIC REALIGN STDCALL uint32_t Release(void **this)
 {
-	DirectInputObject *dinputObj = (DirectInputObject *)(*this - sizeof(DirectInputObject));
+	void *obj = DTHIS_PTR(this);
+	DirectInputObject *dinputObj = (DirectInputObject *)((char *)obj - sizeof(DirectInputObject));
 	if (--dinputObj->ref)
 		return 0;
 
 	if (dinputObj->is_device)
 	{
-		DirectInputDevice *dinputDev = (*(DirectInputDevice **)this);
+		DirectInputDevice *dinputDev = DTHIS(DirectInputDevice, this);
 		if (dinputDev->guid.a == JOYSTICK)
 		{
 			int32_t joyIdx = dinputDev->guid.b;
-
-//			fprintf(stderr, "Release: close device %p %d\n", dinputDev->joy, joyIdx);
 
 			int32_t i;
 			for (i = 0; i != dinputDev->num_effects; ++i)
@@ -566,7 +564,6 @@ MAYBE_STATIC REALIGN STDCALL uint32_t Release(void **this)
 	free(this);
 #endif
 
-//	fprintf(stderr, "Release: 0x%p\n", *this);
 	return 0;
 }
 
@@ -574,33 +571,30 @@ MAYBE_STATIC REALIGN STDCALL uint32_t Release(void **this)
 
 MAYBE_STATIC REALIGN STDCALL uint32_t SetParameters(DirectInputEffect **this, const DIEFFECT *eff, uint32_t flags)
 {
-//	fprintf(stderr, "[%p] SetParameters: %X %X\n", *this, (*this)->effect.type, flags);
-	setEffect(*this, eff);
-	maybeRestartEffect(*this);
+	DirectInputEffect *eff_obj = DTHIS(DirectInputEffect, this);
+	setEffect(eff_obj, eff);
+	maybeRestartEffect(eff_obj);
 	return 0;
 }
 MAYBE_STATIC REALIGN STDCALL uint32_t Start(DirectInputEffect **this, uint32_t iterations, uint32_t flags)
 {
-//	fprintf(stderr, "[%p] Start: %X %d %X\n", *this, (*this)->effect.type, iterations, flags);
-	(*this)->playing = true;
-	maybeRestartEffect(*this);
+	DirectInputEffect *eff_obj = DTHIS(DirectInputEffect, this);
+	eff_obj->playing = true;
+	maybeRestartEffect(eff_obj);
 	return 0;
 }
 MAYBE_STATIC REALIGN STDCALL uint32_t Stop(DirectInputEffect **this)
 {
-//	fprintf(stderr, "[%p] Stop: %X\n", *this, (*this)->effect.type);
-	maybeStopEffect(*this, false);
+	maybeStopEffect(DTHIS(DirectInputEffect, this), false);
 	return 0;
 }
 MAYBE_STATIC REALIGN STDCALL uint32_t Download(DirectInputEffect **this)
 {
-//	fprintf(stderr, "[%p] Download: %X\n", *this, (*this)->real_type);
 	return 0;
 }
 MAYBE_STATIC REALIGN STDCALL uint32_t Unload(DirectInputEffect **this)
 {
-//	fprintf(stderr, "[%p] Unload: %X\n", *this, (*this)->effect.type);
-	maybeStopEffect(*this, false);
+	maybeStopEffect(DTHIS(DirectInputEffect, this), false);
 	return 0;
 }
 
@@ -609,9 +603,9 @@ MAYBE_STATIC REALIGN STDCALL uint32_t Unload(DirectInputEffect **this)
 MAYBE_STATIC REALIGN STDCALL uint32_t GetCapabilities(DirectInputDevice **this, DIDEVCAPS *devCaps)
 {
 	/* Joystick only */
-	if ((*this)->guid.a == JOYSTICK)
+	DirectInputDevice *dev = DTHIS(DirectInputDevice, this);
+	if (dev->guid.a == JOYSTICK)
 	{
-	//	fprintf(stderr, "GetCapabilities %p\n", *this);
 		memset(&devCaps->flags, 0, sizeof(DIDEVCAPS) - sizeof(uint32_t));
 		devCaps->flags = 0x100; //DIDC_FORCEFEEDBACK
 		devCaps->buttons = 32;
@@ -621,39 +615,39 @@ MAYBE_STATIC REALIGN STDCALL uint32_t GetCapabilities(DirectInputDevice **this, 
 }
 MAYBE_STATIC REALIGN STDCALL uint32_t SetProperty(DirectInputDevice **this, const GUID *const rguidProp, const DIPROPHEADER *pdiph)
 {
+	DirectInputDevice *dev = DTHIS(DirectInputDevice, this);
 	if (rguidProp == (void *)0x7 /*DIPROP_FFGAIN*/)
 	{
-		(*this)->gain = ((const DIPROPDWORD *)pdiph)->dwData / 100;
-		if ((*this)->haptic)
-			SDL_SetHapticGain((*this)->haptic, (*this)->gain);
+		dev->gain = ((const DIPROPDWORD *)pdiph)->dwData / 100;
+		if (dev->haptic)
+			SDL_SetHapticGain(dev->haptic, dev->gain);
 	}
 	return 0;
 }
 MAYBE_STATIC REALIGN STDCALL uint32_t Acquire(DirectInputDevice **this)
 {
-//	fprintf(stderr, "Acquire: %p %X\n", *this);
 	return 0;
 }
 MAYBE_STATIC REALIGN STDCALL uint32_t Unacquire(DirectInputDevice **this)
 {
-//	fprintf(stderr, "Unacquire: %u\n", (*this)->ref);
 	return 0;
 }
 MAYBE_STATIC REALIGN STDCALL uint32_t GetDeviceState(DirectInputDevice **this, uint32_t cbData, void *data)
 {
 	/* Joystick only */
-	if (!data || cbData != sizeof(DIJOYSTATE) || (*this)->guid.a != JOYSTICK)
+	DirectInputDevice *dev = DTHIS(DirectInputDevice, this);
+	if (!data || cbData != sizeof(DIJOYSTATE) || dev->guid.a != JOYSTICK)
 		return 0;
 
 	DIJOYSTATE *joyState = (DIJOYSTATE *)data;
 	SDL_memset4(joyState->axes, 0x8000, 8);
 	memset(joyState->buttons, 0, sizeof joyState->buttons);
 
-	SDL_Joystick *joy = (*this)->joy;
+	SDL_Joystick *joy = dev->joy;
 	if (!joy)
 		return 0;
 
-	int32_t joyIdx = (*this)->guid.b;
+	int32_t joyIdx = dev->guid.b;
 
 	int32_t numButtons = SDL_min(SDL_GetNumJoystickButtons(joy), 32);
 	int32_t numAxes = SDL_min(SDL_GetNumJoystickAxes(joy), 6);
@@ -663,11 +657,11 @@ MAYBE_STATIC REALIGN STDCALL uint32_t GetDeviceState(DirectInputDevice **this, u
 
 	if (joystickEscButton[joyIdx] >= 0 && joystickEscButton[joyIdx] < numButtons)
 	{
-		simulateKey(SDLK_ESCAPE, SDL_SCANCODE_ESCAPE, SDL_GetJoystickButton(joy, joystickEscButton[joyIdx]), &(*this)->escPressed);
+		simulateKey(SDLK_ESCAPE, SDL_SCANCODE_ESCAPE, SDL_GetJoystickButton(joy, joystickEscButton[joyIdx]), &dev->escPressed);
 	}
 	if (joystickResetButton[joyIdx] >= 0 && joystickResetButton[joyIdx] < numButtons)
 	{
-		simulateKey(SDLK_F11 + joyIdx, SDL_SCANCODE_F11 + joyIdx, SDL_GetJoystickButton(joy, joystickResetButton[joyIdx]), &(*this)->resetPressed);
+		simulateKey(SDLK_F11 + joyIdx, SDL_SCANCODE_F11 + joyIdx, SDL_GetJoystickButton(joy, joystickResetButton[joyIdx]), &dev->resetPressed);
 	}
 	if (numHats > 0)
 	{
@@ -698,14 +692,14 @@ MAYBE_STATIC REALIGN STDCALL uint32_t GetDeviceState(DirectInputDevice **this, u
 		}
 		for (i = 0; i < 4; ++i)
 		{
-			simulateKey(SDLK_RIGHT + i, SDL_SCANCODE_RIGHT + i, pressed[i], &(*this)->dpadPressed[i]);
+			simulateKey(SDLK_RIGHT + i, SDL_SCANCODE_RIGHT + i, pressed[i], &dev->dpadPressed[i]);
 		}
 	}
 	else for (i = 0; i < 4; ++i)
 	{
 		if (joystickDPadButtons[joyIdx][i] >= 0 && joystickDPadButtons[joyIdx][i] < numButtons)
 		{
-			simulateKey(SDLK_RIGHT + i, SDL_SCANCODE_RIGHT + i, SDL_GetJoystickButton(joy, joystickDPadButtons[joyIdx][i]), &(*this)->dpadPressed[i]);
+			simulateKey(SDLK_RIGHT + i, SDL_SCANCODE_RIGHT + i, SDL_GetJoystickButton(joy, joystickDPadButtons[joyIdx][i]), &dev->dpadPressed[i]);
 		}
 	}
 
@@ -768,7 +762,8 @@ MAYBE_STATIC REALIGN STDCALL uint32_t GetDeviceState(DirectInputDevice **this, u
 MAYBE_STATIC REALIGN STDCALL uint32_t GetDeviceData(DirectInputDevice **this, uint32_t cbObjectData, DIDEVICEOBJECTDATA *rgdod, uint32_t *pdwInOut, uint32_t dwFlags)
 {
 	/* Mouse only. This implementation forces the absolute position of the mouse cursor. */
-	if (!rgdod || !pdwInOut || (*this)->guid.a != MOUSE || *pdwInOut < 3)
+	DirectInputDevice *dev = DTHIS(DirectInputDevice, this);
+	if (!rgdod || !pdwInOut || dev->guid.a != MOUSE || *pdwInOut < 3)
 		return 0;
 
 	uint32_t i;
@@ -779,22 +774,22 @@ MAYBE_STATIC REALIGN STDCALL uint32_t GetDeviceData(DirectInputDevice **this, ui
 	for (i = 3; i < *pdwInOut; ++i)
 		rgdod[i].dwOfs = 8; //Nothing
 
-	if (mousePositionX != (*this)->lastX || mousePositionY != (*this)->lastY)
+	if (mousePositionX != dev->lastX || mousePositionY != dev->lastY)
 	{
 		/* Move the mouse cursor if game changes cursor position */
 		SDL_WarpMouseInWindow(NULL, (mousePositionX / dpr * winWidth / 640.0f) + 0.5f, (mousePositionY / dpr * winHeight / 480.0f) + 0.5f);
-		(*this)->lastX = mousePositionX;
-		(*this)->lastY = mousePositionY;
+		dev->lastX = mousePositionX;
+		dev->lastY = mousePositionY;
 	}
 	else
 	{
 		if (touchId != 0)
 		{
-			(*this)->lastX += touchDX * dpr * 640.0f + 0.5f;
-			(*this)->lastY += touchDY * dpr * 480.0f + 0.5f;
+			dev->lastX += touchDX * dpr * 640.0f + 0.5f;
+			dev->lastY += touchDY * dpr * 480.0f + 0.5f;
 			touchDX = touchDY = 0.0f;
-			rgdod[0].dwData = (*this)->lastX - mousePositionX;
-			rgdod[1].dwData = (*this)->lastY - mousePositionY;
+			rgdod[0].dwData = dev->lastX - mousePositionX;
+			rgdod[1].dwData = dev->lastY - mousePositionY;
 		}
 		else
 		{
@@ -804,10 +799,10 @@ MAYBE_STATIC REALIGN STDCALL uint32_t GetDeviceData(DirectInputDevice **this, ui
 			if (x || y) /* Only when mouse moved */
 			{
 				SDL_GetMouseState(&x, &y);
-				(*this)->lastX = (x * dpr * 640.0f / winWidth)  + 0.5f;
-				(*this)->lastY = (y * dpr * 480.0f / winHeight) + 0.5f;
-				rgdod[0].dwData = (*this)->lastX - mousePositionX;
-				rgdod[1].dwData = (*this)->lastY - mousePositionY;
+				dev->lastX = (x * dpr * 640.0f / winWidth)  + 0.5f;
+				dev->lastY = (y * dpr * 480.0f / winHeight) + 0.5f;
+				rgdod[0].dwData = dev->lastX - mousePositionX;
+				rgdod[1].dwData = dev->lastY - mousePositionY;
 			}
 			if (!lastMouseButton)
 				rgdod[2].dwData = -mouseButton;
@@ -819,25 +814,20 @@ MAYBE_STATIC REALIGN STDCALL uint32_t GetDeviceData(DirectInputDevice **this, ui
 }
 MAYBE_STATIC REALIGN STDCALL uint32_t SetDataFormat(DirectInputDevice **this, const DIDATAFORMAT *df)
 {
-	/* NFSIISE uses standard data format:
-	 * 	Mouse    - c_dfDIMouse
-	 * 	Joystick - c_dfDIJoystick
-	*/
 	return 0;
 }
 MAYBE_STATIC REALIGN STDCALL uint32_t SetEventNotification(DirectInputDevice **this, void *hEvent)
 {
-//	fprintf(stderr, "SetEventNotification: %p 0x%p\n", *this, hEvent);
 	return 0;
 }
 MAYBE_STATIC REALIGN STDCALL uint32_t SetCooperativeLevel(DirectInputDevice **this, void *hwnd, uint32_t dwFlags)
 {
-//	fprintf(stderr, "SetCooperativeLevel: %p %p 0x%X\n", *this, hwnd, dwFlags);
 	return 0;
 }
 MAYBE_STATIC REALIGN STDCALL uint32_t CreateEffect(DirectInputDevice **this, const GUID *const rguid, const DIEFFECT *di_eff, DirectInputEffect ***deff, void *punkOuter)
 {
 	/* Joystick only */
+	DirectInputDevice *dev = DTHIS(DirectInputDevice, this);
 #if defined(HOST_64BIT)
 	DirectInputEffect *dinput_eff = (DirectInputEffect *)malloc32(sizeof(DirectInputObject) + sizeof(DirectInputEffect));
 	memset(dinput_eff, 0, sizeof(DirectInputObject) + sizeof(DirectInputEffect));
@@ -846,7 +836,7 @@ MAYBE_STATIC REALIGN STDCALL uint32_t CreateEffect(DirectInputDevice **this, con
 #endif
 	((DirectInputObject *)dinput_eff)->ref = 1;
 	dinput_eff = (void *)dinput_eff + sizeof(DirectInputObject);
-	dinput_eff->gain = (*this)->gain;
+	dinput_eff->gain = dev->gain;
 	dinput_eff->effect_idx = -1;
 
 	DINPUT_SET_VTABLE(dinput_eff->SetParameters, WRAP_NAME(SetParameters));
@@ -858,59 +848,56 @@ MAYBE_STATIC REALIGN STDCALL uint32_t CreateEffect(DirectInputDevice **this, con
 	if (rguid)
 		memcpy(&dinput_eff->guid, rguid, sizeof(GUID));
 
-	maybeInitEffect(*this, dinput_eff);
+	maybeInitEffect(dev, dinput_eff);
 	setEffect(dinput_eff, di_eff);
-
-//	fprintf(stderr, "%X %X %d\n", dinputEff->guid.a, dinputEff->effect.type, dinputEff->effect_idx);
 
 #if defined(HOST_64BIT)
 	{
 		void *buf = malloc32(sizeof(void *));
-		*(uint32_t *)deff = (uint32_t)(uintptr_t)buf;
-		*(void **)(uintptr_t)(uint32_t)(uintptr_t)buf = (void *)(uintptr_t)(uint32_t)(uintptr_t)dinput_eff;
+		write32le(deff, (uint32_t)(uintptr_t)buf);
+		write32le(buf, (uint32_t)(uintptr_t)dinput_eff);
 	}
 #else
 	*deff = malloc(sizeof(void *));
 	**deff = dinput_eff;
 #endif
 
-	(*this)->num_effects += 1;
+	dev->num_effects += 1;
 
-	(*this)->effects = (DirectInputEffect **)realloc((*this)->effects, (*this)->num_effects * sizeof(DirectInputEffect *));
-	(*this)->effects[(*this)->num_effects - 1] = dinput_eff;
+	dev->effects = (DirectInputEffect **)realloc(dev->effects, dev->num_effects * sizeof(DirectInputEffect *));
+	dev->effects[dev->num_effects - 1] = dinput_eff;
 
 	return 0;
 }
 MAYBE_STATIC REALIGN STDCALL uint32_t GetObjectInfo(DirectInputDevice **this, DIDEVICEOBJECTINSTANCEA *pdidoi, uint32_t dwObj, uint32_t dwHow)
 {
 	/* Joystick only */
-//	fprintf(stderr, "GetObjectInfo: %p %d %d\n", *this, dwObj, dwHow);
 	memset(&pdidoi->guidType, 0, sizeof(DIDEVICEOBJECTINSTANCEA) - sizeof(uint32_t));
 	return 0;
 }
 MAYBE_STATIC REALIGN STDCALL uint32_t SendForceFeedbackCommand(DirectInputDevice **this, uint32_t flags)
 {
 	/* Joystick only */
-//	fprintf(stderr, "[%p] SendForceFeedbackCommand: %X\n", *this, flags);
+	DirectInputDevice *dev = DTHIS(DirectInputDevice, this);
 	int32_t i;
 	switch (flags)
 	{
 		case 0x01: //DISFFC_RESET
 		case 0x02: //DISFFC_STOPALL
-			for (i = 0; i < (*this)->num_effects; ++i)
-				maybeStopEffect((*this)->effects[i], false);
+			for (i = 0; i < dev->num_effects; ++i)
+				maybeStopEffect(dev->effects[i], false);
 			break;
 		case 0x04: //DISFFC_PAUSE
 		case 0x20: //DISFFC_SETACTUATORSOFF
-			for (i = 0; i < (*this)->num_effects; ++i)
-				maybeStopEffect((*this)->effects[i], true);
+			for (i = 0; i < dev->num_effects; ++i)
+				maybeStopEffect(dev->effects[i], true);
 			break;
 		case 0x08: //DISFFC_CONTINUE
 		case 0x10: //DISFFC_SETACTUATORSON
-			for (i = 0; i < (*this)->num_effects; ++i)
+			for (i = 0; i < dev->num_effects; ++i)
 			{
-				if ((*this)->effects[i]->guid.a == FORCE_SQUARE)
-					maybeRestartEffect((*this)->effects[i]);
+				if (dev->effects[i]->guid.a == FORCE_SQUARE)
+					maybeRestartEffect(dev->effects[i]);
 			}
 			break;
 	}
@@ -922,7 +909,7 @@ MAYBE_STATIC REALIGN STDCALL uint32_t Poll(DirectInputDevice **this)
 
 	SDL_UpdateJoysticks();
 
-	ensureJoyOpen(*this);
+	ensureJoyOpen(DTHIS(DirectInputDevice, this));
 
 	return 0;
 }
@@ -967,8 +954,8 @@ MAYBE_STATIC REALIGN STDCALL uint32_t CreateDevice(void **this, const GUID *cons
 	{
 #if defined(HOST_64BIT)
 		void *buf = malloc32(sizeof(void *));
-		*(uint32_t *)directInputDevice = (uint32_t)(uintptr_t)buf;
-		*(void **)(uintptr_t)(uint32_t)(uintptr_t)buf = (void *)(uintptr_t)(uint32_t)(uintptr_t)dinputDev;
+		write32le(directInputDevice, (uint32_t)(uintptr_t)buf);
+		write32le(buf, (uint32_t)(uintptr_t)dinputDev);
 #else
 		*directInputDevice = malloc(sizeof(void *));
 		**directInputDevice = dinputDev;
@@ -1043,8 +1030,8 @@ REALIGN STDCALL uint32_t DirectInputCreateA_wrap(MAYBE_THIS void *hInstance, uin
 	   lower 32 bits are the entire usable address from the game's perspective. */
 	{
 		void *buf = malloc32(sizeof(void *));
-		*(uint32_t *)directInputA = (uint32_t)(uintptr_t)buf;
-		*(void **)(uintptr_t)(uint32_t)(uintptr_t)buf = (void *)(uintptr_t)(uint32_t)(uintptr_t)dinput;
+		write32le(directInputA, (uint32_t)(uintptr_t)buf);
+		write32le(buf, (uint32_t)(uintptr_t)dinput);
 	}
 #else
 	*directInputA = malloc(sizeof(void *));

@@ -396,8 +396,22 @@ All source files ported from SDL2 to SDL3.  Builds cleanly with zero warnings.
 - **Entry.cpp: fixed native write at line 37** — `*(uint32_t *)` → `Application::write32()` for LE byte order
 - **Application.h: cleaned `za()` debug spam** — removed `fprintf` on PPC64
 
-### Current status
-The `_doStart` STOSD crash was caused by `dword_4E0950` reading as `0xF4000000` due to byte order mismatch on PPC64.  With `swap_initial_data()` re-enabled, the TLS size is correctly 244 bytes and the alloca/memset stays within the x86 stack.  The pool guard page is now 4 pages (256 KB, up from 1 page) as a defensive layer against any future buffer overruns.
+### Current status (June 2026)
+
+Both the STOSD TLS overflow and the DirectInput null-pointer crash are fixed.
+
+**STOSD crash (solved):** `dword_4E0950` reading as `0xF4000000` → fix: re-enable `swap_initial_data()` on PPC64 (converts DATA from BE to LE byte representation).  TLS size correctly 244 bytes.
+
+**DirectInput crash (solved):** `to32i(edx+0xC)` with `edx=0` at `Methods_02.cpp:16803`.  The game reads `dword_4D4C44` via `to32i` (4 LE bytes), but `DirectInputCreateA_wrap` stored the pool address via `*(uint32_t *)` (native BE store on PPC64).  The byte-swapped value (e.g. `0x00003040` instead of `0x40300000`) pointed to unmapped memory → `edx=0` → `to32i(0xC)` SIGSEGV.
+
+**Root cause is SYSTEMIC:** Any C code that writes a 32-bit value to DATA-field or pool memory via `*(uint32_t *)` (native BE store) and is later read by the game via `to32i`/`read32` (LE read) gets a byte-swapped value.  Conversely, any native `*(void **)` read from a buffer written with 4 LE bytes gets a wrong 64-bit pointer on BE.
+
+**Systemic fixes applied:**
+1. **SwapInit.h (PPC64):** `swap_initial_data()` re-enabled — converts DATA initializers from BE to LE byte representation so `read32` returns correct values.
+2. **DInput.h:** Changed `DINPUT_SET_VTABLE` from native `slot = value` to `write32le(&(slot), value)` — all DirectInput vtable entries are stored in LE byte order.
+3. **DInput.h:** Added `DTHIS_PTR(this_ptr)` and `DTHIS(type, this_ptr)` macros — on PPC64 they use `read32le` to read 4 LE bytes from intermediate buffers; on LE they expand to the original `*(void **)`.  All `*this`/`(*this)` dereferences in `DInput.c` replaced with these macros.
+4. **DInput.c (DirectInputCreateA_wrap, CreateDevice, CreateEffect):** Changed `*(uint32_t *)` stores to DATA fields to `write32le()` — prevents byte-swapped pointer values.
+5. **Wrapper.c (defensive):** Guard page increased from 64 KB to 256 KB (4 pages) as safety net for buffer overruns.
 
 ### Pool layout (PPC64)
 3 pre-allocated chunks (mmap via MAP_FIXED_NOREPLACE), consumed by bump allocator in decreasing size order:
@@ -410,13 +424,6 @@ The `_doStart` STOSD crash was caused by `dword_4E0950` reading as `0xF4000000` 
 
 The guard pages `[0x80800000, 0x80840000)` are mapped R/W but never tracked by the bump allocator. Any read/write that overflows the bump space by ≤ 256 KB lands in accessible memory.
 
-### How the two changes fix the crash
-
-**Root cause:** `swap_initial_data()` returned early on PPC64, so DATA fields kept native big-endian byte order. `read32` reads memory as little-endian (b0 = LSB), so every DATA field value was byte-swapped. `dword_4E0950` = `{0xF4}` (244 bytes TLS size) was stored as `[0x00,0x00,0x00,0xF4]` (BE) and read as `0xF4000000` (~4 GB). This made `_doStart`'s alloca/memset overflow the pool.
-
-**Fix:**
-1. **SwapInit.h (corrective):** Re-enable `swap_initial_data()` on PPC64 to convert DATA from BE to LE byte representation. The TLS size is now correctly 244 bytes.
-2. **Wrapper.c (defensive):** Guard page increased from 64 KB (1 page) to 256 KB (4 pages) as a safety net for any future buffer overruns. Pool reserve (64 KB) also retained.
-
 ### Next steps
-1. Test on PPC64BE — the STOSD crash should be gone (the TLS memset stays within the x86 stack)
+1. Test on PPC64BE — the STOSD crash should be gone and the DirectInput initialization should work.
+2. The game may crash further along (audio, rendering, etc.) as subsequent bugs are unmasked by fixing earlier crashes.
