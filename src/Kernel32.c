@@ -373,6 +373,8 @@ REALIGN STDCALL uint32_t WaitForMultipleObjects_wrap(uint32_t count, Event *cons
 			   Read each entry as little-endian uint32_t and zero-extend. */
 			const unsigned char *ev_bytes = (const unsigned char *)events;
 			Event *ev = (Event *)(uintptr_t)read32le(ev_bytes + (intptr_t)i * 4);
+			if (!ev)
+				continue;
 			if (ev->is_set)
 			{
 				if (ret == WAIT_TIMEOUT)

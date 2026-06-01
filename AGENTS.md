@@ -517,3 +517,23 @@ address — **reverted**.  The null guard remains as the sole change.
 2. The game may crash further along (rendering, audio, etc.) as subsequent bugs are unmasked.
 3. If the game reaches the main menu, begin testing gameplay for endian-breakage.
 4. If the game exits early, check whether `dword_4DAB5C` has the wrong value on PPC64 (it should be 0 but appears non-zero, and the reason is still unknown).
+
+### Fixed: WaitForMultipleObjects_wrap `ev->is_set` crash (crash in thread 10 audio)
+
+**Crash:** `SIGSEGV at Kernel32.c:376` — `ev->is_set` where `ev = (Event *)read32le(events[0])` returned an invalid pointer (garbage or NULL).  `events=0x41096ac0` is the x86 stack pointer (pool address, identity-mapped).  Thread 10 is the audio thread (`audio_game_thread`).
+
+**Call chain:** `threadFunction` → `_sub_4837D0` → `_sub_489E5C` → `_sub_489A48` → `WaitForMultipleObjects_wrap`.
+
+**Data flow (verified correct):**
+1. `_sub_489E0C` calls `CreateEventA_wrap(NULL,0,0,NULL)` → returns `Event *` from `malloc32` (pool, low 4 GB) → stored in `eax`.
+2. `to32i(dword_5637D8) = eax` — stores event handle in BSS via Int32Cache (thread-local).
+3. `eax = to32i(dword_5637D8)` — reads back via Int32Cache hit (same thread).
+4. `_sub_489E5C`: `to32i(esp) = eax` — stores event handle on x86 stack via Int32Cache (different address from BSS → flush writes handle to pool memory).
+5. `push32` cascade in `_sub_489A48` flushes all cached values to memory.
+6. `WaitForMultipleObjects_wrap` reads `events[0]` via `read32le(pool_addr)` — should get valid handle.
+
+**Int32Cache analysis:** The `thread_local` cache ensures no cross-thread pollution.  The flush sequence between step 4 and step 6 correctly writes the event handle to pool memory before the read.  The only likely root causes are:
+- Memory corruption from the `iSNDdirectstart_` stack override (`EAcsnd.c:96-103`), which overwrites `audio_game_thread->esp` with a 64 KB `audio_stack + 0x100` during `_sub_4837D0`'s loop.
+- A race condition where `SetEvent_wrap` or another thread corrupts the event handle on the x86 stack (unlikely since each thread has its own stack).
+
+**Fix (`Kernel32.c:376`):** Null guard — `if (!ev) continue;` — skips invalid event handles in the poll loop.  Prevents the SIGSEGV; the thread will `SDL_WaitCondition` until a valid event is signaled.
