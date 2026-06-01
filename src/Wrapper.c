@@ -88,19 +88,22 @@ static int pool_grow(void)
 {
 	static long page_size = 0;
 	if (!page_size) page_size = sysconf(_SC_PAGE_SIZE);
-	/* Compute the page-aligned start just above the binary's data/BSS. */
+	/* Compute the page-aligned start just above the binary's data/BSS.
+	   If _end is above POOL_LOW_MAX (binary has large BSS), use a
+	   fixed low address that is safely past our BSS end but still
+	   below the mid chunk. */
 	uintptr_t low_start = ((uintptr_t)_end + page_size - 1) & ~(uintptr_t)(page_size - 1);
-	if (low_start >= POOL_LOW_MAX)
-		low_start = 0x01000000;  /* fallback: shouldn't happen */
+	if (low_start >= POOL_LOW_MAX || low_start + POOL_SIZE >= 0x20000000U)
+		low_start = 0x18000000;  /* fixed: safely past 0x11a51948 BSS end */
 
 	/* Non-overlapping identity pool ranges.  Each range must end
 	   before (or at) the next range's start, otherwise MAP_FIXED_
 	   NOREPLACE fails with EEXIST.  Together the ranges cover the
 	   full game heap VA space up to 0x80000000 (2 GB). */
 	const uintptr_t addrs[] = {
-		low_start,   /* low:  [low_start, 0x10000000)            ~240 MB */
-		0x20000000,  /* mid:  [0x20000000, 0x40000000)           512 MB */
-		0x40000000,  /* high: [0x40000000, 0x80000000)             1 GB */
+		low_start,   /* low:  [low_start, 0x20000000)   384–512 MB */
+		0x20000000,  /* mid:  [0x20000000, 0x40000000)     512 MB */
+		0x40000000,  /* high: [0x40000000, 0x80000000)       1 GB */
 	};
 	for (int i = 0; i < (int)(sizeof addrs / sizeof addrs[0]); i++) {
 		int skip = 0;
@@ -112,13 +115,10 @@ static int pool_grow(void)
 		size_t sz;
 		if (i < (int)(sizeof addrs / sizeof addrs[0]) - 1)
 			sz = (size_t)(addrs[i+1] - addrs[i]);
-		else if (addrs[i] < POOL_LOW_MAX)
-			sz = POOL_LOW_MAX - addrs[i];
 		else
 			sz = POOL_SIZE * 4;  /* last chunk: ~1 GB */
 		void *p;
 
-#if defined(MAP_FIXED_NOREPLACE)
 		p = mmap((void *)addrs[i], sz,
 			       PROT_READ | PROT_WRITE,
 			       MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED_NOREPLACE,
@@ -126,27 +126,10 @@ static int pool_grow(void)
 		if (p != MAP_FAILED) {
 			goto mapped_ok;
 		}
-		if (errno == EEXIST) {
-			/* Low-range addresses (< POOL_LOW_MAX) may EEXIST
-			   because the kernel's BSS zero-fill pages extend
-			   up to our start address.  Try plain MAP_FIXED
-			   (safe to replace zero-fill pages).  Higher
-			   addresses (>= POOL_LOW_MAX) skip as before. */
-			if (addrs[i] < POOL_LOW_MAX)
-				goto try_fixed;
-			continue;
-		}
-		/* EINVAL → flag not supported; fall through to plain MAP_FIXED */
-#endif
-try_fixed:
-		p = mmap((void *)addrs[i], sz,
-			       PROT_READ | PROT_WRITE,
-			       MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
-			       -1, 0);
-		if (p != MAP_FAILED) {
-			goto mapped_ok;
-		}
-
+		/* Address occupied or unavailable — skip it and try the
+		   next slot.  Never fall back to plain MAP_FIXED (which
+		   can crash on PPC64 with 64 KB pages when replacing
+		   existing mappings). */
 		continue;
 
 mapped_ok:
