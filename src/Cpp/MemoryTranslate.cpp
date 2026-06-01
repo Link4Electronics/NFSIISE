@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-#include <stdio.h>
 #include <unistd.h>
 #include <pthread.h>
 #include "MemoryTranslate.h"
@@ -60,48 +59,22 @@ uint32_t translate_host_to_x86(const void *host_addr)
 	return (uint32_t)h;
 }
 
-/* Convert a truncated 32-bit address back to the full 64-bit host address.
-   Called from wrapper functions on PPC64 where the truncated address
-   received from push32 may not have an identity mapping established.
-   Works by checking if the truncated address falls within the known
-   DATA or BSS host ranges (truncated to 32 bits) and reversing the
-   truncation. */
 uintptr_t translate_truncated_addr(uint32_t truncated)
 {
-	static int diag_printed = 0;
 	uintptr_t t = (uintptr_t)truncated;
 
-	/* Check BSS range (truncated host address). */
 	if (s_trans.bss_size) {
 		uintptr_t bss_trunc = (uint32_t)s_trans.bss_base;
 		if (t >= bss_trunc && t - bss_trunc < s_trans.bss_size)
 			return s_trans.bss_base + (t - bss_trunc);
 	}
 
-	/* Check DATA range (truncated host address). */
 	if (s_trans.data_size) {
 		uintptr_t data_trunc = (uint32_t)s_trans.data_base;
 		if (t >= data_trunc && t - data_trunc < s_trans.data_size)
 			return s_trans.data_base + (t - data_trunc);
 	}
 
-	if (!diag_printed) {
-		fprintf(stderr, "translate_truncated_addr(0x%x): miss "
-		        "bss{trunc=0x%lx base=0x%lx size=%zu} "
-		        "data{trunc=0x%lx base=0x%lx size=%zu} "
-		        "t=0x%lx t-bss_trunc=0x%lx t-data_trunc=0x%lx\n",
-		        truncated,
-		        (unsigned long)(uint32_t)s_trans.bss_base,
-		        (unsigned long)s_trans.bss_base, s_trans.bss_size,
-		        (unsigned long)(uint32_t)s_trans.data_base,
-		        (unsigned long)s_trans.data_base, s_trans.data_size,
-		        (unsigned long)t,
-		        (unsigned long)(t - (uint32_t)s_trans.bss_base),
-		        (unsigned long)(t - (uint32_t)s_trans.data_base));
-		diag_printed = 1;
-	}
-
-	/* Everything else (pool, code) is already identity-mapped. */
 	return t;
 }
 
