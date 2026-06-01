@@ -3158,7 +3158,8 @@ Fn(void) Game::_sub_484D94()
 	push32(edx);
 	edx = 1; //mov
 	esp -= 4; _sub_4848B0(); esp += 4; //call
-	eax = to32i(eax+0x14); //mov
+	if (eax)
+		eax = to32i(eax+0x14); //mov
 	pop32(edx);
 }
 Fn(void) Game::_sub_484DA4()
