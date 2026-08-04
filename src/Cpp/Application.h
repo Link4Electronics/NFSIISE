@@ -7,19 +7,6 @@ struct Application : public CPU
 {
 	/* AF and PF flags are ignored */
 
-#if defined(__powerpc64__) || defined(__PPC64__)
-
-	/* Zero-extend a possibly-negative int32 to uintptr_t so that
-	   addresses >= 0x80000000U are not sign-extended to kernel space.
-	   Also translate x86 virtual addresses to host pointers.  Pool
-	   and code addresses are identity-mapped — only BSS/DATA x86 VAs
-	   need actual translation. */
-	template<typename T>
-	static FnInl(uintptr_t) za(const T a)
-	{
-		return translate_x86_addr((uint32_t)(intptr_t)a);
-	}
-
 	/* All x86 data is little-endian in memory (both BSS/DATA and pool
 	   chunks).  These helpers always read/write LE, regardless of host
 	   endianness, so that the same accessor code works for all memory.
@@ -84,6 +71,19 @@ struct Application : public CPU
 		((volatile unsigned char *)p)[2] = (unsigned char)(v >> 16);
 		((volatile unsigned char *)p)[1] = (unsigned char)(v >> 8);
 		((volatile unsigned char *)p)[0] = (unsigned char)v;
+	}
+
+#if defined(__powerpc64__) || defined(__PPC64__)
+
+	/* Zero-extend a possibly-negative int32 to uintptr_t so that
+	   addresses >= 0x80000000U are not sign-extended to kernel space.
+	   Also translate x86 virtual addresses to host pointers.  Pool
+	   and code addresses are identity-mapped — only BSS/DATA x86 VAs
+	   need actual translation. */
+	template<typename T>
+	static FnInl(uintptr_t) za(const T a)
+	{
+		return translate_x86_addr((uint32_t)(intptr_t)a);
 	}
 
 	struct Int32Cache { int32_t val; const void *addr; };

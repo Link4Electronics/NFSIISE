@@ -54,6 +54,7 @@ extern "C" void nfs2seEntrypoint()
 			Application::write32((void *)(fe0 + 0x20), (uint32_t)fe1);
 			Application::write32((void *)(fe1 + 0x20), 0);
 			/* store the head of the free list into dword_563F04[0] */
+			#undef dword_563F04
 			Application::write32((void *)&_bss.dword_563F04, (uint32_t)fe0);
 		}
 	}
@@ -69,6 +70,11 @@ extern "C" void nfs2seEntrypoint()
 	   Without initialization, they stay NULL and cause SIGSEGV when the
 	   format string "%s" is passed to sprintf (glibc outputs "(null)"). */
 	{
+		/* These BSS fields are only ever referenced raw (via &_bss.field)
+		   here; undef the macros so they don't self-expand. */
+		#undef dword_5134D8
+		#undef dword_5134B4
+		#undef dword_5134B8
 		uint16_t *empty_w = (uint16_t *)malloc32(4);
 		if (empty_w) {
 			empty_w[0] = 0;
