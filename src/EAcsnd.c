@@ -35,24 +35,54 @@ static SDL_AudioStream *audioStream;
 static BOOL unPaused, canGetSamples;
 static uint32_t buffer_pos;
 static uint8_t *buffer;
+static uint8_t residual[2048];
+static int residual_len;
 
 static void SDLCALL sdl3_audio_callback(void *userdata, SDL_AudioStream *stream, int additional_amount, int total_amount)
 {
-	while (additional_amount > 0)
+	while (residual_len > 0 && additional_amount > 0)
 	{
-		int chunk = 256 * CHN_CNT * (int)sizeof(int16_t);
-		if (chunk > additional_amount) chunk = additional_amount;
-
-		if (!linearSoundInterpolation)
+		int n = residual_len;
+		if (n > additional_amount) n = additional_amount;
+		SDL_PutAudioStreamData(stream, residual, n);
+		additional_amount -= n;
+		if (n < residual_len)
 		{
-			getSamplesFunc(buffer, 256);
-			SDL_PutAudioStreamData(stream, buffer, chunk);
+			memmove(residual, residual + n, residual_len - n);
+			residual_len -= n;
 		}
 		else
+			residual_len = 0;
+	}
+
+	if (!linearSoundInterpolation)
+	{
+		int frame = 256 * CHN_CNT * (int)sizeof(int16_t);
+		while (additional_amount > 0)
+		{
+			int chunk = frame;
+			if (chunk > additional_amount) chunk = additional_amount;
+			getSamplesFunc(buffer, 256);
+			SDL_PutAudioStreamData(stream, buffer, chunk);
+			if (chunk < frame)
+			{
+				residual_len = frame - chunk;
+				memcpy(residual, buffer + chunk, residual_len);
+			}
+			additional_amount -= chunk;
+		}
+	}
+	else
+	{
+		int frame = 512 * CHN_CNT * (int)sizeof(int16_t);
+		int raw_sz = 256 * CHN_CNT * (int)sizeof(int16_t);
+		while (additional_amount > 0)
 		{
 			int16_t *raw = (int16_t *)buffer;
-			int16_t *out = (int16_t *)(buffer + 512 * CHN_CNT * (int)sizeof(int16_t));
+			int16_t *out = (int16_t *)(buffer + raw_sz);
 			uint32_t i, c;
+			int chunk = frame;
+			if (chunk > additional_amount) chunk = additional_amount;
 			getSamplesFunc(raw, 256);
 			for (i = 0; i < (256 - 1) * CHN_CNT; i += CHN_CNT)
 			{
@@ -64,9 +94,14 @@ static void SDLCALL sdl3_audio_callback(void *userdata, SDL_AudioStream *stream,
 			}
 			for (c = 0; c < CHN_CNT; ++c)
 				out[i + c] = out[i + c + CHN_CNT] = raw[i + c];
-			SDL_PutAudioStreamData(stream, out, 512 * CHN_CNT * (int)sizeof(int16_t));
+			SDL_PutAudioStreamData(stream, out, chunk);
+			if (chunk < frame)
+			{
+				residual_len = frame - chunk;
+				memcpy(residual, (uint8_t *)out + chunk, residual_len);
+			}
+			additional_amount -= chunk;
 		}
-		additional_amount -= chunk;
 	}
 }
 
@@ -160,6 +195,7 @@ REALIGN uint32_t iSNDdirectstop_(void)
 		audioStream = NULL;
 	}
 	buffer_pos = 0;
+	residual_len = 0;
 #if defined(HOST_64BIT)
 	free32(buffer);
 #else
